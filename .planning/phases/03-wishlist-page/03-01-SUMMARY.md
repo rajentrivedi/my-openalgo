@@ -109,6 +109,11 @@ None.
 
 ## Self-Check: PASSED
 
+- [x] `database/wishlist_db.py` exists
+- [x] `blueprints/wishlist.py` exists
+- [x] `frontend/src/api/wishlist.ts` exists
+- [x] `frontend/src/pages/Wishlist.tsx` exists
+- [x] `SUMMARY.md` exists
 - [x] All 6 tasks executed
 - [x] Each task committed individually (6 commits)
 - [x] `database/wishlist_db.py` — model + CRUD working
