@@ -14,10 +14,13 @@ logger = get_logger(__name__)
 
 class BrokerData:
     def __init__(self, auth_token):
-        # Updated for Neo API v2: session_token:::session_sid:::base_url:::access_token
-        self.session_token, self.session_sid, self.base_url, self.access_token = auth_token.split(
-            ":::"
-        )
+        # Updated for Neo API v2: trading_token:::trading_sid:::base_url:::access_token[:::hsServerId]
+        parts = auth_token.split(":::")
+        self.session_token = parts[0]
+        self.session_sid = parts[1]
+        self.base_url = parts[2]
+        self.access_token = parts[3]
+        self.hs_server_id = parts[4] if len(parts) >= 5 else ""
 
         # baseUrl is mandatory; it comes from MPIN validation. Raise if missing.
         if not self.base_url or not self.base_url.startswith("http"):
@@ -28,6 +31,7 @@ class BrokerData:
         self.base_url = self.base_url.rstrip("/")
         self.quotes_base_url = self.base_url  # Use broker-provided baseUrl for quotes
         self.last_quote_error = None
+
         logger.info(f"Using quotes baseUrl: {self.quotes_base_url}")
 
         # Define empty timeframe map since Kotak Neo doesn't support historical data
@@ -168,9 +172,7 @@ class BrokerData:
                 # For indices, map to correct Neo API format and use static exchange mapping
                 kotak_exchange = self._get_kotak_exchange(exchange)
                 candidates = self._get_index_symbol_candidates(symbol)
-                logger.info(
-                    f"QUOTES API - Index candidates for {symbol}: {candidates}"
-                )
+                logger.info(f"QUOTES API - Index candidates for {symbol}: {candidates}")
                 response, query = self._query_index_with_candidates(
                     kotak_exchange, candidates, "all"
                 )
@@ -278,9 +280,7 @@ class BrokerData:
                 # For indices, map to correct Neo API format and use static exchange mapping
                 kotak_exchange = self._get_kotak_exchange(exchange)
                 candidates = self._get_index_symbol_candidates(symbol)
-                logger.debug(
-                    f"DEPTH API - Index candidates for {symbol}: {candidates}"
-                )
+                logger.debug(f"DEPTH API - Index candidates for {symbol}: {candidates}")
                 response, query = self._query_index_with_candidates(
                     kotak_exchange, candidates, "depth"
                 )

@@ -105,12 +105,8 @@ def manage_api_key():
 def update_api_key_mode():
     """Update order mode (auto/semi_auto) for a user"""
     try:
-        user_id = request.json.get("user_id")
+        user_id = session["user"]
         mode = request.json.get("mode")
-
-        if not user_id:
-            logger.error("Order mode update attempted without user ID")
-            return jsonify({"error": "User ID is required"}), 400
 
         if not mode or mode not in ["auto", "semi_auto"]:
             logger.error(f"Invalid order mode: {mode}")

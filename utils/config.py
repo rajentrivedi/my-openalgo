@@ -56,3 +56,19 @@ def get_host_server() -> str:
         str: The host server URL string.
     """
     return os.getenv("HOST_SERVER", "http://127.0.0.1:5000")
+
+
+def get_kotak_proxy_enabled() -> bool:
+    return os.getenv("KOTAK_PROXY_ENABLED", "false").strip().lower() == "true"
+
+
+def get_kotak_proxy_url() -> str | None:
+    return os.getenv("KOTAK_PROXY_URL")
+
+
+def get_kotak_proxy_api_key() -> str | None:
+    return os.getenv("KOTAK_PROXY_API_KEY")
+
+
+def get_kotak_proxy_ipv6() -> str | None:
+    return os.getenv("KOTAK_PROXY_IPV6")

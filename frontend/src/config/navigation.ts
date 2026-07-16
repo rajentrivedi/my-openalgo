@@ -37,7 +37,6 @@ export interface NavItem {
 export const navItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/orderbook', label: 'Orderbook', icon: ClipboardList },
-  { href: '/place-order', label: 'Place Order', icon: ShoppingCart },
   { href: '/tradebook', label: 'Tradebook', icon: FileText },
   { href: '/positions', label: 'Positions', icon: TrendingUp },
   { href: '/action-center', label: 'Action Center', icon: Bell },
@@ -65,6 +64,8 @@ export const mobileSheetItems = navItems.filter((item) => !bottomNavPaths.includ
 
 // Profile dropdown menu items
 export const profileMenuItems: NavItem[] = [
+  { href: '/place-order', label: 'Place Order', icon: ShoppingCart },
+  { href: '/wishlist', label: 'Wishlist', icon: Heart },
   { href: '/profile', label: 'Profile', icon: User },
   { href: '/apikey', label: 'API Key', icon: Key },
   { href: '/master-contract', label: 'Master Contract', icon: FileStack },

@@ -543,11 +543,16 @@ class TelegramBotService:
         # Check if we're in eventlet environment
         if "eventlet" in sys.modules:
             logger.info("Using synchronous initialization for eventlet environment")
-            # Use synchronous httpx to validate token
             from utils.httpx_client import get_httpx_client
 
-            try:
+            def _do_validate():
                 response = get_httpx_client().get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
+                return response
+
+            try:
+                import eventlet.tpool
+
+                response = eventlet.tpool.execute(_do_validate)
 
                 if response.status_code == 200:
                     data = response.json()
