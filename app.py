@@ -114,6 +114,7 @@ from blueprints.vol_surface import vol_surface_bp  # Import the vol surface blue
 from blueprints.watchlist import watchlist_bp  # Import the charting watchlist blueprint
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 from blueprints.whatsapp import whatsapp_bp  # Import the WhatsApp blueprint
+from blueprints.wishlist import wishlist_bp  # Import the Wishlist blueprint
 from cors import init_cors
 from csp import apply_csp_middleware  # Import the CSP middleware
 from database.action_center_db import init_db as ensure_action_center_tables_exists
@@ -133,6 +134,7 @@ from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_module_db import init_db as ensure_strategy_module_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
+from database.wishlist_db import init_db as ensure_wishlist_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.user_db import init_db as ensure_user_tables_exists
@@ -351,6 +353,7 @@ def create_app():
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
     app.register_blueprint(strategy_portfolio_bp)  # Register Strategy Portfolio blueprint
     app.register_blueprint(postback_bp)  # Register broker postback (order-update webhook) blueprint
+    app.register_blueprint(wishlist_bp)  # Register Wishlist blueprint
 
     # Remote MCP (HTTP + OAuth) — opt-in via MCP_HTTP_ENABLED. Off by default.
     # Pre-flight refusal: must NEVER coexist with FLASK_DEBUG=True (debug-mode
@@ -775,6 +778,7 @@ def setup_environment(app):
                 # and has to win the write lock against it. This phase is
                 # single-threaded, so the same DDL runs uncontended. See #1750.
                 ("Scheduler Job Stores", ensure_jobstore_tables_exist),
+                ("Wishlist DB", ensure_wishlist_tables_exists),
             ]
 
             db_init_start = time.time()
