@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-07-16T02:15:51.735Z"
+status: Phase 04 Complete
+last_updated: "2026-07-16T09:15:00.000Z"
 progress:
-  total_phases: 3
-  completed_phases: 1
-  total_plans: 4
-  completed_plans: 1
+  total_phases: 4
+  completed_phases: 2
+  total_plans: 6
+  completed_plans: 2
 ---
 
 # Project State
 
-**Position:** Phase 3, Plan 1 (completed)
+**Position:** Phase 04, Plan 01 (completed)
 **Last Updated:** 2026-07-16
 
 ## Phase 01: Kotak Order Page — Completed
@@ -24,6 +24,37 @@ progress:
 ## Phase 02: Kotak Neo Proxy — In Progress
 
 - Plan 01: Kotak Neo Zero IP proxy phase plan (created)
+
+## Phase 04: Wishlist Price Alerts — Completed
+
+### Implementation Summary
+
+- `database/wishlist_alert_db.py` — WishlistAlerts model with FK to wishlist_items, CHECK constraint on condition_type, all CRUD functions
+- `services/wishlist_price_monitor_service.py` — Singleton WishlistPriceMonitor with 30s background polling, condition evaluation (target_above/below, percent_up/down), Telegram + WhatsApp notification dispatch
+- `blueprints/wishlist.py` — 6 alert endpoints (POST/GET/PATCH/DELETE) for CRUD and toggle
+- `app.py` — Alert DB init registration in startup sequence
+- `frontend/src/api/wishlist.ts` — WishlistAlert/CreateAlertRequest interfaces, 5 API methods
+- `frontend/src/api/client.ts` — Added PATCH to CSRF interceptor
+- `frontend/src/pages/Wishlist.tsx` — Bell icon indicators (green/active, amber/triggered, gray/disabled), alert creation dialog, inline switch toggle and delete
+
+### Commits
+
+- 3df4865e — feat(phase-04): create wishlist alert database model
+- 594c70a9 — feat(phase-04): create WishlistPriceMonitorService
+- 3baa4dba — feat(phase-04): add wishlist alert API endpoints
+- 63892c9f — feat(phase-04): register wishlist alert DB init in app.py
+- b7b25eed — feat(phase-04): extend frontend API client with alert types
+- 23499bdc — feat(phase-04): add alert management UI to Wishlist page
+- a6576db1 — style(phase-04): fix import sorting after lint
+- 0295ed66 — docs(phase-04): add execution summary for plan 04-01
+
+### Decisions
+
+- Polling interval set to 30 seconds (not aggressive, suitable for broker API rate limits)
+- Reference price auto-fetched for percentage conditions at alert creation time
+- Monitor auto-starts on first alert creation, auto-stops when no active alerts remain
+- Both Telegram and WhatsApp dispatched simultaneously on alert trigger
+- FK ON DELETE CASCADE on wishlist_item_id — deleting a wishlist item auto-deletes its alerts
 
 ## Phase 03: Wishlist Page — Plan 1 Completed
 
