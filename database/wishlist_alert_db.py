@@ -1,7 +1,18 @@
 import logging
 import os
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Index, Integer, String, create_engine
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    create_engine,
+)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -28,7 +39,9 @@ class WishlistAlert(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(String(255), nullable=False, index=True)
-    wishlist_item_id = Column(Integer, ForeignKey("wishlist_items.id", ondelete="CASCADE"), nullable=False)
+    wishlist_item_id = Column(
+        Integer, ForeignKey("wishlist_items.id", ondelete="CASCADE"), nullable=False
+    )
     symbol = Column(String(50), nullable=False)
     exchange = Column(String(10), nullable=False, default="NSE")
     condition_type = Column(String(20), nullable=False)
@@ -57,7 +70,15 @@ def init_db():
     init_db_with_logging(Base, engine, "Wishlist Alert DB", logger)
 
 
-def create_alert(user_id, wishlist_item_id, symbol, exchange, condition_type, condition_value, reference_price=None):
+def create_alert(
+    user_id,
+    wishlist_item_id,
+    symbol,
+    exchange,
+    condition_type,
+    condition_value,
+    reference_price=None,
+):
     try:
         alert = WishlistAlert(
             user_id=user_id,
@@ -91,10 +112,7 @@ def get_user_alerts(user_id):
 
 def get_active_alerts():
     try:
-        return (
-            WishlistAlert.query.filter_by(is_active=True, triggered=False)
-            .all()
-        )
+        return WishlistAlert.query.filter_by(is_active=True, triggered=False).all()
     except Exception as e:
         logger.exception(f"Error getting active alerts: {str(e)}")
         return []

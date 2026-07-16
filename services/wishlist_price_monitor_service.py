@@ -107,9 +107,13 @@ class WishlistPriceMonitor:
                     logger.debug(f"No API key for user {alert.user_id}, skipping alert {alert.id}")
                     continue
 
-                auth_token, feed_token, broker = get_auth_token_broker(api_key, include_feed_token=True)
+                auth_token, feed_token, broker = get_auth_token_broker(
+                    api_key, include_feed_token=True
+                )
                 if not auth_token:
-                    logger.debug(f"No auth token for user {alert.user_id}, skipping alert {alert.id}")
+                    logger.debug(
+                        f"No auth token for user {alert.user_id}, skipping alert {alert.id}"
+                    )
                     continue
 
                 success, result, status_code = get_quotes_with_auth(
