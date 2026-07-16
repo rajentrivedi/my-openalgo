@@ -34,6 +34,7 @@ const SamcoAuth = lazy(() => import('@/pages/SamcoAuth'))
 const Dashboard = lazy(() => import('@/pages/Dashboard'))
 const Positions = lazy(() => import('@/pages/Positions'))
 const OrderBook = lazy(() => import('@/pages/OrderBook'))
+const PlaceOrder = lazy(() => import('@/pages/PlaceOrder'))
 const TradeBook = lazy(() => import('@/pages/TradeBook'))
 const Holdings = lazy(() => import('@/pages/Holdings'))
 const Token = lazy(() => import('@/pages/Token'))
@@ -44,6 +45,7 @@ const AgentConfig = lazy(() => import('@/pages/agent/AgentConfig'))
 const Profile = lazy(() => import('@/pages/Profile'))
 const MasterContract = lazy(() => import('@/pages/MasterContract'))
 const ActionCenter = lazy(() => import('@/pages/ActionCenter'))
+const Wishlist = lazy(() => import('@/pages/Wishlist'))
 
 // Platform pages
 const Platforms = lazy(() => import('@/pages/Platforms'))
@@ -188,6 +190,7 @@ function App() {
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/positions" element={<Positions />} />
                 <Route path="/orderbook" element={<OrderBook />} />
+                <Route path="/place-order" element={<PlaceOrder />} />
                 <Route path="/tradebook" element={<TradeBook />} />
                 <Route path="/holdings" element={<HoldingsRoute />} />
                 {/* Search routes - match Flask /search/* routes */}
@@ -302,6 +305,7 @@ function App() {
                 <Route path="/profile" element={<Profile />} />
                 <Route path="/master-contract" element={<MasterContract />} />
                 <Route path="/action-center" element={<ActionCenter />} />
+                <Route path="/wishlist" element={<Wishlist />} />
               </Route>
 
               {/* Full-width protected routes */}
