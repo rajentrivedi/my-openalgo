@@ -291,7 +291,8 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
                         )
                         return offered_back
                 update_broker_status(pending_order_id, None, "rejected")
-                logger.warning(f"Order rejected by broker: pending_order_id={pending_order_id}")
+                error_msg = response_data.get("message") or response_data.get("emsg") or response_data.get("error") or str(response_data) if isinstance(response_data, dict) else str(response_data)
+                logger.warning(f"Order rejected by broker: pending_order_id={pending_order_id}, error={error_msg}")
 
             elif api_type == "placegttorder":
                 trigger_id = response_data.get("trigger_id")

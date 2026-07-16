@@ -282,11 +282,17 @@ def place_order_with_auth(
 
         return True, order_response_data, 200
     else:
-        message = (
-            response_data.get("message", "Failed to place order")
-            if isinstance(response_data, dict)
-            else "Failed to place order"
-        )
+        if isinstance(response_data, dict):
+            message = (
+                response_data.get("message")
+                or response_data.get("emsg")
+                or response_data.get("errMsg")
+                or response_data.get("error")
+                or str(response_data)
+            )
+        else:
+            message = str(response_data) if response_data else "Failed to place order"
+        logger.warning(f"Broker order failed: status={res.status}, response={response_data}")
         error_response = {"status": "error", "message": message}
         bus.publish(
             OrderFailedEvent(

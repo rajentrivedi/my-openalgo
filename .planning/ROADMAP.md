@@ -34,7 +34,32 @@
 
 ---
 
+---
+
+## Phase 4: Wishlist Price Alerts
+
+**Goal:** Add price alert functionality to the wishlist page so users can set target price and percentage change alerts on wishlist items, with automatic notifications via Telegram and WhatsApp when conditions are met.
+
+**Requirements:** [WISH-ALERT-01, WISH-ALERT-02, WISH-ALERT-03, WISH-ALERT-04]
+
+**Plans:** 0 plans
+- [x] 04-01-PLAN.md — Create wishlist alert database, monitor service, API, and frontend
+
+---
+
 ## Requirements
+
+### WISH-ALERT-01: Alert Database
+A database model for wishlist alerts with fields for wishlist_item_id, user_id, condition_type (target_above, target_below, percent_up, percent_down), condition_value, reference_price, is_active, triggered status, and timestamps.
+
+### WISH-ALERT-02: Price Monitor Service
+A singleton background service that periodically polls active wishlist alerts, fetches live prices via quotes_service, evaluates conditions, and triggers notifications.
+
+### WISH-ALERT-03: Alert API
+REST API endpoints (POST/GET/DELETE/PATCH) for creating, listing, toggling, and deleting wishlist alerts, scoped to the authenticated user.
+
+### WISH-ALERT-04: Alert UI
+Frontend integration on the wishlist page to set alerts per symbol, view alert status (active/triggered), enable/disable, and delete alerts.
 
 ### ORD-01: Manual Order Entry Page
 A dedicated page at `/place-order` where users can manually enter and submit orders with symbol search, exchange selection, and full order parameters.

@@ -1,8 +1,8 @@
 import json
 import os
-import urllib.parse
 import threading
 import time
+import urllib.parse
 
 import httpx
 
@@ -24,27 +24,46 @@ from utils.smart_order_guard import PositionBookCache, SymbolLocks
 logger = get_logger(__name__)
 
 
+def _parse_auth(auth_token):
+    """Parse the compound auth token, returning (session_token, session_sid, base_url, hs_server_id, view_sid, view_token).
+
+    Supports multiple formats:
+    4-part (legacy): trading_token:::trading_sid:::base_url:::access_token
+    5-part (v2):     trading_token:::trading_sid:::base_url:::access_token:::hsServerId
+    6-part (v3):     trading_token:::trading_sid:::base_url:::access_token:::hsServerId:::view_sid
+    7-part (v4):     trading_token:::trading_sid:::base_url:::access_token:::hsServerId:::view_sid:::view_token
+    """
+    parts = auth_token.split(":::")
+    session_token, session_sid, base_url = parts[0], parts[1], parts[2]
+    hs_server_id = parts[4] if len(parts) >= 5 else ""
+    view_sid = parts[5] if len(parts) >= 6 else session_sid
+    view_token = parts[6] if len(parts) >= 7 else session_token
+    return session_token, session_sid, base_url, hs_server_id, view_sid, view_token
+
+
 def get_api_response(endpoint, auth_token, method="GET", payload=""):
     """
     Updated for Kotak Neo API v2 - uses dynamic baseUrl, httpx connection pooling, and new header structure
     """
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
+    session_token, session_sid, base_url, hs_server_id, view_sid, view_token = _parse_auth(auth_token)
 
     # Debug logging for baseUrl
     logger.debug(f"ORDER API - Using baseUrl: {base_url}")
 
-    # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     headers = {
         "accept": "application/json",
-        "Sid": session_sid,
-        "Auth": session_token,
+        "Sid": view_sid,
+        "Auth": view_token,
         "neo-fin-key": "neotradeapi",
+        "Content-Type": "application/x-www-form-urlencoded",
     }
 
-    # Construct full URL
+    # Construct full URL (add sId query param from hsServerId if available, only when non-empty)
     url = f"{base_url}{endpoint}"
+    if hs_server_id:
+        url += f"?sId={hs_server_id}"
 
     # Make request using httpx
     response = client.request(method, url, headers=headers, content=payload if payload else None)
@@ -218,7 +237,6 @@ def _invalidate_position_cache(auth):
     _POSITION_BOOK.invalidate(auth)
 
 
-
 def get_open_position(tradingsymbol, exchange, producttype, auth_token):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
@@ -243,13 +261,20 @@ def get_open_position(tradingsymbol, exchange, producttype, auth_token):
     return net_qty
 
 
-def place_order_api(data, auth_token):
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
+def _make_error_response(status_code):
+    """Create a dummy response-like object with .status and .status_code for error paths."""
+    class _DummyResponse:
+        def __init__(self, code):
+            self.status = code
+            self.status_code = code
+    return _DummyResponse(status_code)
 
-    # Debug logging for baseUrl
+
+def place_order_api(data, auth_token):
+    session_token, session_sid, base_url, hs_server_id, view_sid, view_token = _parse_auth(auth_token)
+
     logger.debug(f"PLACE ORDER API - Using baseUrl: {base_url}")
 
-    # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     # Payload construction can reject the order before any network call — an
@@ -268,32 +293,31 @@ def place_order_api(data, auth_token):
 
     headers = {
         "accept": "application/json",
-        "Sid": session_sid,
-        "Auth": session_token,
-        "neo-fin-key": "neotradeapi",
+        "Sid": view_sid,
+        "Auth": view_token,
         "Content-Type": "application/x-www-form-urlencoded",
     }
 
-    # Construct full URL
     url = f"{base_url}/quick/order/rule/ms/place"
+    if hs_server_id:
+        url += f"?sId={hs_server_id}"
 
     try:
         response = client.post(url, headers=headers, content=payload)
         logger.info(f"PLACE ORDER API Response: {response.status_code} {response.text}")
 
-        # Add status attribute for compatibility with the existing codebase
         response.status = response.status_code
 
         response_data = json.loads(response.text)
 
-        orderid = response_data["nOrdNo"] if response_data["stat"] == "Ok" else None
+        orderid = response_data.get("nOrdNo") if response_data.get("stat") == "Ok" else None
         return response, response_data, orderid
     except httpx.HTTPError as e:
         logger.error(f"HTTP error in place_order_api: {e}")
-        return None, {"stat": "NotOk", "error": str(e)}, None
+        return _make_error_response(500), {"stat": "NotOk", "message": str(e)}, None
     except Exception as e:
         logger.error(f"Error in place_order_api: {e}")
-        return None, {"stat": "NotOk", "error": str(e)}, None
+        return _make_error_response(500), {"stat": "NotOk", "message": str(e)}, None
 
 
 @refuse_smart_order_on_read_failure
@@ -449,23 +473,23 @@ def close_all_positions(current_api_key, auth_token):
 
 
 def cancel_order(orderid, auth_token):
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
+    session_token, session_sid, base_url, hs_server_id, view_sid, view_token = _parse_auth(auth_token)
 
-    # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     payload = f"jData={urllib.parse.quote(json.dumps({'on': orderid, 'am': 'NO'}))}"
 
     headers = {
         "accept": "application/json",
-        "Sid": session_sid,
-        "Auth": session_token,
-        "neo-fin-key": "neotradeapi",
+        "Sid": view_sid,
+        "Auth": view_token,
         "Content-Type": "application/x-www-form-urlencoded",
     }
 
-    # Construct full URL
+    # Construct full URL (add sId query param from hsServerId if available, only when non-empty)
     url = f"{base_url}/quick/order/cancel"
+    if hs_server_id:
+        url += f"?sId={hs_server_id}"
 
     try:
         response = client.post(url, headers=headers, content=payload)
@@ -486,12 +510,11 @@ def cancel_order(orderid, auth_token):
 
 
 def modify_order(data, auth_token):
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
+    session_token, session_sid, base_url, hs_server_id, view_sid, view_token = _parse_auth(auth_token)
 
     # Debug logging for baseUrl
     logger.debug(f"MODIFY ORDER API - Using baseUrl: {base_url}")
 
-    # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     # Same pre-flight rejection as placement (SL-M without a usable trigger or
@@ -509,14 +532,15 @@ def modify_order(data, auth_token):
 
     headers = {
         "accept": "application/json",
-        "Sid": session_sid,
-        "Auth": session_token,
-        "neo-fin-key": "neotradeapi",
+        "Sid": view_sid,
+        "Auth": view_token,
         "Content-Type": "application/x-www-form-urlencoded",
     }
 
-    # Construct full URL
+    # Construct full URL (add sId query param from hsServerId if available, only when non-empty)
     url = f"{base_url}/quick/order/vr/modify"
+    if hs_server_id:
+        url += f"?sId={hs_server_id}"
 
     logger.debug(f"MODIFY ORDER - Making POST request to: {url}")
 

@@ -62,7 +62,7 @@ def authenticate_broker(mobile_number, totp, mpin):
         # Add +91 prefix
         mobile_number = f"+91{mobile_number}"
 
-        # Get the shared httpx client with connection pooling
+        # Get the shared httpx client with connection pooling (direct, not via proxy)
         client = get_httpx_client()
 
         # Step 1: Login with TOTP

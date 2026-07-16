@@ -205,6 +205,7 @@ class BrokerData:
         self.base_url = self.base_url.rstrip("/")
         self.quotes_base_url = self.base_url  # Use broker-provided baseUrl for quotes
         self.last_quote_error = None
+
         logger.info(f"Using quotes baseUrl: {self.quotes_base_url}")
 
         # OpenAlgo interval -> Neo interval. "60m" is an accepted alias for "1h":
@@ -386,9 +387,7 @@ class BrokerData:
                 # For indices, map to correct Neo API format and use static exchange mapping
                 kotak_exchange = self._get_kotak_exchange(exchange)
                 candidates = self._get_index_symbol_candidates(symbol)
-                logger.info(
-                    f"QUOTES API - Index candidates for {symbol}: {candidates}"
-                )
+                logger.info(f"QUOTES API - Index candidates for {symbol}: {candidates}")
                 response, query = self._query_index_with_candidates(
                     kotak_exchange, candidates, "all"
                 )

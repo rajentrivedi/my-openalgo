@@ -1,0 +1,114 @@
+V3 EXIT DIAGNOSTIC REPORT
+======================================================================
+Universe: 10 symbols
+Period: 2026-07-01 -> 2026-09-11
+
+EXIT ARCHITECTURE COMPARISON
+----------------------------------------------------------------------
+T1 target-only (trailing OFF)          trades= 247 net= -2323.44 win%= 42.9 pf= 0.85 avgR=-0.020 target= 47 stop= 86 trail=  0 eod=114
+T2 trailing ON immediate (0.75)        trades= 252 net= -2990.25 win%= 34.1 pf= 0.57 avgR=-0.009 target=  7 stop=  6 trail=239 eod=  0
+T3 trailing ON activate +0.5R          trades= 251 net= -2449.02 win%= 59.8 pf= 0.80 avgR= 0.004 target= 11 stop= 64 trail=132 eod= 44
+T4 trailing-only (target OFF)          trades= 252 net= -2787.52 win%= 34.1 pf= 0.60 avgR= 0.003 target=  0 stop=  6 trail=246 eod=  0
+
+TRAILING MULTIPLIER SWEEP (trailing on, target on)
+----------------------------------------------------------------------
+ trail_atr_multiplier  trades  win_rate  gross_pnl    cost  net_pnl  profit_factor  avg_r  max_drawdown  sharpe  TARGET  STOP_LOSS  TRAILING_STOP  EOD_SQUARE_OFF
+                 0.50     252     37.30     611.96 2575.19 -1963.27          0.678  0.014       2016.24  -3.418       4          6            242               0
+                 0.75     252     34.13    -425.61 2564.58 -2990.25          0.574 -0.009       3092.06  -5.068       7          6            239               0
+                 1.00     251     34.26    -797.41 2553.52 -3351.05          0.580 -0.023       3439.94  -5.101      12          6            233               0
+                 1.25     251     36.65    -365.71 2556.10 -2921.78          0.643 -0.022       3169.30  -4.210      13          6            232               0
+                 1.50     250     37.20    -260.66 2549.97 -2810.56          0.678 -0.026       3333.43  -3.681      18          6            224               2
+
+COST SENSITIVITY (0.02% slippage, trailing on)
+----------------------------------------------------------------------
+ cost_pct  gross_pnl    cost  net_pnl  win_rate  profit_factor
+     0.00    -406.25    0.00  -406.25     42.06          0.925
+     0.01    -404.36  860.12 -1264.45     38.49          0.788
+     0.02    -424.38 1714.25 -2138.83     35.71          0.670
+     0.03    -425.61 2564.58 -2990.25     34.13          0.574
+     0.05    -434.52 4253.03 -4687.53     30.16          0.427
+
+SLIPPAGE SENSITIVITY (0.03% cost, trailing on)
+----------------------------------------------------------------------
+ slippage_pct  gross_pnl  net_pnl  win_rate  profit_factor
+         0.00    1286.59 -1302.75     38.49          0.782
+         0.01     450.87 -2125.84     35.71          0.672
+         0.02    -425.61 -2990.25     34.13          0.574
+         0.03   -1244.78 -3801.19     30.95          0.499
+
+R-MULTIPLE DISTRIBUTION (trailing on)
+----------------------------------------------------------------------
+  r_bucket  trades  gross_pnl  net_pnl   pct
+     <-1.0       6    -729.18  -795.16  2.38
+-1.0..-0.5      18   -1226.86 -1416.15  7.14
+   -0.5..0     124   -3458.27 -4716.29 49.21
+    0..0.5      80    2494.51  1690.62 31.75
+  0.5..1.0      16    1303.28  1138.58  6.35
+  1.0..1.5       8    1190.91  1108.15  3.17
+  1.5..2.0       0       0.00     0.00  0.00
+      >2.0       0       0.00     0.00  0.00
+
+TIME-TO-PROFIT (bars of 5m; -1 = never reached)
+----------------------------------------------------------------------
+  +0.25R  reached  45.2%  median=  1.0 bars  mean=  1.6 bars  (n=114)
+  +0.50R  reached  23.4%  median=  1.0 bars  mean=  1.7 bars  (n=59)
+  +0.75R  reached  12.7%  median=  2.0 bars  mean=  2.2 bars  (n=32)
+  +1.00R  reached   7.5%  median=  2.0 bars  mean=  2.7 bars  (n=19)
+  +1.50R  reached   3.2%  median=  2.5 bars  mean=  3.2 bars  (n=8)
+
+PROFIT GIVE-BACK
+----------------------------------------------------------------------
+  Trades reaching +1R:      19 / 252 (7.5%)
+  Of those, exited < +0.5R: 1 (5.3% of +1R trades)
+  Avg peak MFE of those:    1.81R, avg final: 0.42R
+
+HOLDING-TIME BUCKETS (minutes)
+----------------------------------------------------------------------
+hold_bucket  trades  win_rate  net_pnl    avg_r
+        0-5       7 14.285714  -697.64 -0.68000
+       5-10     159 29.559748 -2586.23 -0.04956
+      10-15      40 37.500000   -75.68  0.09800
+      15-30      40 45.000000   -65.53  0.05300
+      30-60       6 83.333333   434.83  0.73500
+        60+       0       NaN     0.00      NaN
+
+RELATIVE VOLUME BUCKETS
+----------------------------------------------------------------------
+  1.20-1.50: n= 37 win%= 37.8 net= -304.98 avgR= 0.016
+  1.50-2.00: n= 58 win%= 20.7 net=-1544.15 avgR=-0.090
+  2.00-3.00: n= 72 win%= 30.6 net=-1122.39 avgR=-0.047
+  >3.00: n= 85 win%= 44.7 net=  -18.73 avgR= 0.069
+
+RANGE WIDTH % BUCKETS
+----------------------------------------------------------------------
+  0.00-0.50: n=119 win%= 40.3 net= -215.62 avgR= 0.053
+  0.50-0.75: n= 85 win%= 28.2 net=-1663.15 avgR=-0.065
+  0.75-1.00: n= 47 win%= 29.8 net=-1090.97 avgR=-0.060
+  >1.00: n=  1 win%=  0.0 net=  -20.51 avgR=-0.070
+
+SESSION ANALYSIS
+----------------------------------------------------------------------
+  S1: trades=176 win%= 34.7 gross= -720.55 net=-2462.09 avgR=-0.019 pf=0.53
+  S2: trades= 76 win%= 32.9 gross=  294.94 net= -528.16 avgR= 0.016 pf=0.70
+
+LONG vs SHORT
+----------------------------------------------------------------------
+  LONG: trades= 96 win%= 32.3 gross= -579.15 net=-1544.59 avgR=-0.045 pf=0.53 avgdur= 13.5m
+  SHORT: trades=156 win%= 35.3 gross=  153.54 net=-1445.66 avgR= 0.014 pf=0.61 avgdur= 13.4m
+
+======================================================================
+CLASSIFICATION
+======================================================================
+Target-only gross P&L before cost:  229.88
+Target-only exits: TARGET=47 STOP=86
+Trailing-ON gross P&L before cost:  -425.61
+Trailing-ON total estimated cost:   2564.58
+% trades reaching +0.5R: 23.4%
+% trades reaching +1.0R: 7.5%
+% trades reaching +1.5R: 3.2%
+
+Interpretation guide:
+  - If few trades reach +0.5R  -> weak entry edge (Category B)
+  - If many reach +1R but final R is low -> trailing gives profit back (A)
+  - If gross_before_cost ~ 0 and cost large -> costs kill a small edge (D)
+  - target-only materially better than trailing -> trailing destroys edge (A)

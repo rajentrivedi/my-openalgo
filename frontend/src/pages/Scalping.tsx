@@ -822,6 +822,7 @@ export default function Scalping() {
   const submitOrder = useCallback(
     async (leg: SelectedLeg | null, action: ScalpingAction) => {
       const s = stateRef.current
+      console.log(s)
       if (!s.armed) {
         showToast.error('One-Click is disarmed — enable it to trade', 'orders')
         return
@@ -1048,7 +1049,11 @@ export default function Scalping() {
           {lastLatencyMs != null && (
             <span className="font-mono text-xs text-muted-foreground">order {lastLatencyMs}ms</span>
           )}
-          <Badge variant={armed ? 'destructive' : 'secondary'}>
+          <Badge
+            variant={armed ? 'destructive' : 'secondary'}
+            onClick={() => setArmed((a) => !a)}
+            className="cursor-pointer select-none"
+          >
             One-Click {armed ? 'ARMED' : 'off'}
           </Badge>
           <Badge variant={wsBadge.variant}>{wsBadge.label}</Badge>

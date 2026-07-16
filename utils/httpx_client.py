@@ -73,6 +73,69 @@ def get_pool_stats() -> dict | None:
     return stats
 
 
+def get_proxied_httpx_client(
+    proxy_url: str,
+    proxy_api_key: str,
+    proxy_ipv6: str,
+) -> httpx.Client:
+    import os
+    import time
+
+    from flask import g
+
+    proxy_headers = {
+        "Proxy-Authorization": f"Bearer {proxy_api_key}",
+        "X-Snipy-Proxy-IPv6": proxy_ipv6,
+    }
+
+    proxy = httpx.Proxy(
+        url=proxy_url,
+        headers=proxy_headers,
+    )
+
+    def log_request(request):
+        request.extensions["start_time"] = time.time()
+
+    def log_response(response):
+        try:
+            start_time = response.request.extensions.get("start_time")
+            if start_time:
+                duration_ms = (time.time() - start_time) * 1000
+                try:
+                    from flask import has_request_context
+
+                    if has_request_context() and hasattr(g, "latency_tracker"):
+                        g.broker_api_time = duration_ms
+                except (RuntimeError, AttributeError):
+                    pass
+        except Exception:
+            pass
+
+    app_mode = os.environ.get("APP_MODE", "integrated").strip().strip("'\"")
+    http2_enabled = app_mode != "standalone"
+
+    client = httpx.Client(
+        proxy=proxy,
+        http2=http2_enabled,
+        http1=True,
+        timeout=120.0,
+        limits=httpx.Limits(
+            max_keepalive_connections=40,
+            max_connections=100,
+            keepalive_expiry=30.0,
+        ),
+        verify=True,
+        event_hooks={"request": [log_request], "response": [log_response]},
+    )
+
+    logger.info(
+        f"Created proxied HTTP client via {proxy_url} "
+        f"(HTTP/2={'enabled' if http2_enabled else 'disabled'})"
+    )
+
+    return client
+
+
 def request(method: str, url: str, **kwargs) -> httpx.Response:
     """
     Make an HTTP request using the shared client with automatic protocol negotiation.

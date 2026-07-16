@@ -82,3 +82,19 @@ def build_external_url(path: str) -> str:
     if not path.startswith("/"):
         path = f"/{path}"
     return f"{base}{path}"
+
+
+def get_kotak_proxy_enabled() -> bool:
+    return os.getenv("KOTAK_PROXY_ENABLED", "false").strip().lower() == "true"
+
+
+def get_kotak_proxy_url() -> str | None:
+    return os.getenv("KOTAK_PROXY_URL")
+
+
+def get_kotak_proxy_api_key() -> str | None:
+    return os.getenv("KOTAK_PROXY_API_KEY")
+
+
+def get_kotak_proxy_ipv6() -> str | None:
+    return os.getenv("KOTAK_PROXY_IPV6")

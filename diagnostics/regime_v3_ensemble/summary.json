@@ -1,0 +1,53 @@
+{
+  "timestamp": "2026-09-12 09:41:48",
+  "params": {
+    "selection_method": "LLM_TOP",
+    "top_n": 5,
+    "risk_per_trade_pct": 0.25,
+    "max_trades_per_day": 5,
+    "estimated_cost_pct": 0.03,
+    "slippage_pct": 0.02,
+    "max_candidates": 50,
+    "llm_enabled": true
+  },
+  "overall": {
+    "n": 35,
+    "net_pnl": -491.7453130168811,
+    "win_rate": 22.857142857142858,
+    "profit_factor": 0.5096,
+    "avg_r": 0.25086285714285717,
+    "max_drawdown_pct": 0.6071,
+    "gross_pnl": 133.62819652898764,
+    "total_cost": 375.22410572752125
+  },
+  "regime_breakdown": {
+    "BULL": {
+      "trades": 3,
+      "net": -131.11584323324917,
+      "wr": 33.33333333333333
+    },
+    "SIDEWAYS": {
+      "trades": 32,
+      "net": -360.6294697836319,
+      "wr": 21.875
+    }
+  },
+  "selection_method_breakdown": {
+    "FALLBACK_DETERMINISTIC": {
+      "trades": 35,
+      "net": -491.7453130168811,
+      "wr": 22.857142857142858
+    }
+  },
+  "llm_value_add": {
+    "llm_net": -491.7453130168811,
+    "ensemble_net": -491.7453130168811,
+    "random_net": -433.2747071458063,
+    "llm_vs_ensemble": 0.0,
+    "llm_vs_random": -58.47060587107478,
+    "llm_wr": 22.857142857142858,
+    "ensemble_wr": 22.857142857142858,
+    "llm_pf": 0.5096,
+    "ensemble_pf": 0.5096
+  }
+}

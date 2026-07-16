@@ -1,0 +1,35 @@
+V3 BACKTEST VALIDATION REPORT
+============================================================
+
+[PASS   ] ENTRY EXECUTION TEST
+          entries outside allowed sessions: 0
+[PASS   ] STOP TEST
+          zero/negative risk trades: 0
+[PASS   ] TARGET TEST
+          trades with R!=target_rr: 0
+[PASS   ] TRAILING STOP TEST
+          trailing exits=239 (use_trailing=True)
+[PASS   ] EOD EXIT TEST
+          EOD exits=0
+[PASS   ] NIFTY LOOKAHEAD TEST
+          invalid regimes: 0
+[PASS   ] POSITION SIZING TEST
+          non-positive qty: 0
+[PASS   ] DAILY TRADE LIMIT TEST
+          days exceeding 5: 0 (max seen=5)
+[PASS   ] DAILY LOSS LIMIT TEST
+          worst daily PnL=-324.23 vs limit=-2000.00
+[PASS   ] PORTFOLIO RISK TEST
+          max open risk=942.38 cap=1000.00
+[PASS   ] COST TEST
+          total estimated cost=2564.58 (SIMPLE model, 0.03% one-way)
+[PASS   ] SLIPPAGE TEST
+          one-way slippage=0.02% applied at entry+exit
+[PASS   ] EQUITY RECONCILIATION TEST
+          sum(trade net)=-2990.25 sum(daily net)=-2990.22 final-initial=-2990.22
+[PASS   ] DATE RANGE TEST
+          trades span 2026-07-01..2026-09-11 | equity rows=3954 | daily rows=53
+
+TOTALS: PASS=14 WARNING=0 FAIL=0
+
+Notes: 5-min OHLC cannot resolve intrabar stop-vs-target order; policy=CONSERVATIVE assumes STOP first when both touched.

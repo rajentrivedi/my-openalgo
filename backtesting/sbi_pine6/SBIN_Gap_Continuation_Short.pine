@@ -1,0 +1,144 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════
+//  SBI Gap-Continuation Short  (Pine Script v6)
+//  Quantix | Validated on SBIN 1m data 2026-02-16 .. 2026-08-14
+// ═══════════════════════════════════════════════════════════════════════════
+//  CONCEPT
+//  Intraday gap-continuation short, 1 trade/day, long-only bias is NOT used
+//  because SBIN was in a ~10% downtrend over the sample period.
+//
+//  ENTRY  (all must hold, evaluated on the 09:20 5-min bar close)
+//    1. It is the configured entry bar (default 09:20 on a 5m chart).
+//    2. The day opened with a down gap:  gapPct < -0.05%
+//       (gapPct = (todayOpen - yesterdayClose) / yesterdayClose * 100)
+//    3. Yesterday was a RED day (yesterdayClose < yesterdayOpen).
+//
+//  EXITS
+//    * Optional stop-loss at entry + slAtrMult * ATR(14)  (default 4x, 0 = none).
+//    * Hard square-off at 15:15 IST (or session end).
+//
+//  WHY IT WORKED ON THE SAMPLE (costs included, 0.05%/side)
+//    Stop 4xATR : 22 trades, +16,712 Rs (+1.67%), WR 59%, PF 1.97, worst -2,950 Rs
+//    No stop    : 22 trades, +23,132 Rs (+2.31%), WR 68%, PF 2.85, worst -2,542 Rs
+//    Both sample halves positive (regime: SBI trending down).
+//
+//  CAVEATS (read before trading)
+//    * SHORT-ONLY and regime-dependent: it profits while SBI drifts lower and
+//      will lose when SBI trends up hard. Do not run it in a bull phase.
+//    * Small sample (22 trades / 6 months). Size small, respect the stop.
+//    * Use a 5m chart (entry bar = 09:20). MIS/short-sell intraday required.
+//    * Add slippage via the slippage field of this strategy call if you trade
+//      a fast-moving tape.
+// ═══════════════════════════════════════════════════════════════════════════
+
+strategy(
+     "SBI Gap-Continuation Short [Quantix]",
+     overlay = true,
+     initial_capital = 1000000,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 20,                       // 20% of equity per trade
+     commission_type = strategy.commission.percent,
+     commission_value = 0.05,                      // ~0.05% per side (brokerage + charges)
+     slippage = 0,
+     pyramiding = 0,
+     process_orders_on_close = true,               // signals act on bar close
+     calc_on_every_tick = false)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+gapMinPct   = input.float(0.05, "Min down-gap % (short when gap < -value)", minval = 0.0, step = 0.01)
+slAtrMult   = input.float(4.0, "Stop-loss ATR multiple (0 = no stop)", minval = 0.0, step = 0.5)
+atrLen      = input.int(14, "ATR length", minval = 1)
+entryHour   = input.int(9, "Entry hour (IST)", minval = 9, maxval = 14)
+entryMinute = input.int(20, "Entry minute (IST)", minval = 0, maxval = 59)
+exitHour    = input.int(15, "Square-off hour (IST)", minval = 9, maxval = 15)
+exitMinute  = input.int(15, "Square-off minute (IST)", minval = 0, maxval = 59)
+enableLong  = input.bool(false, "Also trade long mirror (loses on sample)", group = "Advanced")
+minPrevRange = input.float(0.0, "Min yesterday range % (0 = off)", minval = 0.0, step = 0.1, group = "Advanced")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DAILY CONTEXT  (stable values only: today's open + yesterday's OHLC)
+// ═══════════════════════════════════════════════════════════════════════════
+// lookahead_on lets the D series be aligned so dOpen = TODAY's open on every
+// intraday bar of today, and [1] offsets read yesterday's completed data.
+// dClose (today's close) is never used in signals, so nothing repaints.
+
+[dClose, dOpen, dHigh, dLow] = request.security(
+     syminfo.tickerid,
+     "D",
+     [close, open, high, low],
+     lookahead = barmerge.lookahead_on)
+
+gapPct    = (dOpen - dClose[1]) / dClose[1] * 100
+prevRed   = dClose[1] < dOpen[1]
+prevGreen = dClose[1] > dOpen[1]
+prevRangePct = (dHigh[1] - dLow[1]) / dClose[1] * 100
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SESSION / ENTRY BAR
+// ═══════════════════════════════════════════════════════════════════════════
+
+inSession = not na(time(timeframe.period, "0915-1515"))
+
+// Bar END time: `time` is the bar's OPEN timestamp, so hour(time)==9
+// minute(time)==20 would fire 5 minutes late on a 5m chart. Using the bar
+// END keeps entry (09:20 close) and square-off (15:15 close) exact and
+// matches the validated backtest timestamps 1:1.
+barEnd = time + int(timeframe.in_seconds(timeframe.period) * 1000)
+
+entryBar = hour(barEnd) == entryHour and minute(barEnd) == entryMinute and inSession
+exitBar  = hour(barEnd) == exitHour and minute(barEnd) == exitMinute and inSession
+
+atr = ta.atr(atrLen)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SIGNALS
+// ═══════════════════════════════════════════════════════════════════════════
+
+shortSignal = entryBar and gapPct < -gapMinPct and prevRed and prevRangePct >= minPrevRange
+longSignal  = enableLong and entryBar and gapPct > gapMinPct and prevGreen and prevRangePct >= minPrevRange
+
+if shortSignal and strategy.position_size == 0
+     strategy.entry("Short", strategy.short, comment = "gap-down + red prev")
+     if slAtrMult > 0
+          strategy.exit("SL", from_entry = "Short", stop = close + slAtrMult * atr)
+
+if longSignal and strategy.position_size == 0
+     strategy.entry("Long", strategy.long, comment = "gap-up + green prev")
+     if slAtrMult > 0
+          strategy.exit("SL", from_entry = "Long", stop = close - slAtrMult * atr)
+
+// Hard square-off at 15:15 / end of session.
+if exitBar and strategy.position_size != 0
+     strategy.close_all(comment = "EOD 15:15")
+
+if not inSession and strategy.position_size != 0
+     strategy.close_all(comment = "session over")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VISUALS
+// ═══════════════════════════════════════════════════════════════════════════
+
+plotshape(shortSignal, title = "Short entry", style = shape.triangledown,
+     location = location.abovebar, color = color.red, size = size.small, text = "SHORT")
+plotshape(longSignal, title = "Long entry", style = shape.triangleup,
+     location = location.belowbar, color = color.green, size = size.small, text = "LONG")
+plotshape(exitBar, title = "Square-off", style = shape.xcross,
+     location = location.abovebar, color = color.orange, size = size.tiny, text = "X")
+
+// Info table: gap % and prior-day direction.
+var table infoTbl = table.new(position.top_right, 2, 3, bgcolor = color.new(color.black, 30))
+if barstate.islast
+     table.cell(infoTbl, 0, 0, "Today gap %", text_color = color.white)
+     table.cell(infoTbl, 1, 0, str.tostring(gapPct, "#.##"), text_color = color.white)
+     table.cell(infoTbl, 0, 1, "Prev day", text_color = color.white)
+     table.cell(infoTbl, 1, 1, prevRed ? "RED (short bias)" : (prevGreen ? "GREEN" : "FLAT"),
+          text_color = prevRed ? color.red : color.white)
+     table.cell(infoTbl, 0, 2, "Prev range %", text_color = color.white)
+     table.cell(infoTbl, 1, 2, str.tostring(prevRangePct, "#.##"), text_color = color.white)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// END
+// ═══════════════════════════════════════════════════════════════════════════

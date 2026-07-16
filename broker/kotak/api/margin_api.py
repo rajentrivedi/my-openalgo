@@ -12,13 +12,19 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _parse_auth_kotak(auth_token):
+    """Parse compound auth token, returning (session_token, session_sid, base_url, hs_server_id)."""
+    parts = auth_token.split(":::")
+    return parts[0], parts[1], parts[2], (parts[4] if len(parts) >= 5 else "")
+
+
 def calculate_single_margin(position_data, auth_token):
     """
     Calculate margin for a single position using Kotak API.
 
     Args:
         position_data: Transformed position data in Kotak format
-        auth_token: Authentication token (session_token:::session_sid:::base_url:::access_token)
+        auth_token: Authentication token (session_token:::session_sid:::base_url:::access_token[:::hsServerId])
 
     Returns:
         Tuple of (response, parsed_response_data)
@@ -37,7 +43,6 @@ def calculate_single_margin(position_data, auth_token):
         "accept": "application/json",
         "Sid": session_sid,
         "Auth": session_token,
-        "neo-fin-key": "neotradeapi",
         "Content-Type": "application/x-www-form-urlencoded",
     }
 
@@ -47,8 +52,10 @@ def calculate_single_margin(position_data, auth_token):
 
     logger.debug(f"Kotak margin calculation payload: {payload}")
 
-    # Construct full URL
+    # Construct full URL (add sId query param from hsServerId if available)
     url = f"{base_url}/quick/user/check-margin"
+    if hs_server_id:
+        url += f"?sId={hs_server_id}"
 
     try:
         # Make the request

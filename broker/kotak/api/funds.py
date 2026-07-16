@@ -9,11 +9,17 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _parse_auth_kotak(auth_token):
+    """Parse compound auth token, returning (trading_token, trading_sid, base_url, hs_server_id)."""
+    parts = auth_token.split(":::")
+    return parts[0], parts[1], parts[2], (parts[4] if len(parts) >= 5 else "")
+
+
 def get_margin_data(auth_token):
     """
     Fetch margin data from the broker's API using the provided auth token.
 
-    Auth token format: trading_token:::trading_sid:::base_url:::access_token
+    Auth token format: trading_token:::trading_sid:::base_url:::access_token[:::hsServerId]
     """
     try:
         # Parse auth token components
@@ -24,10 +30,10 @@ def get_margin_data(auth_token):
             )
             return {}
 
-        trading_token = access_token_parts[0]
-        trading_sid = access_token_parts[1]
-        base_url = access_token_parts[2]
-        access_token = access_token_parts[3]
+        trading_token = parts[0]
+        trading_sid = parts[1]
+        base_url = parts[2]
+        hs_server_id = parts[4] if len(parts) >= 5 else ""
 
         if not base_url:
             logger.error("Base URL not found in auth token")
@@ -47,12 +53,13 @@ def get_margin_data(auth_token):
             "accept": "application/json",
             "Sid": trading_sid,
             "Auth": trading_token,
-            "neo-fin-key": "neotradeapi",
             "Content-Type": "application/x-www-form-urlencoded",
         }
 
-        # Construct full URL
+        # Construct full URL (add sId query param from hsServerId if available)
         url = f"{base_url}/quick/user/limits"
+        if hs_server_id:
+            url += f"?sId={hs_server_id}"
 
         logger.debug(f"Making POST request to {url}")
 

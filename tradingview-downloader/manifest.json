@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "TradingView Strategy Tester Exporter",
+  "version": "1.0",
+  "description": "Exports the trade list from TradingView Strategy Tester to CSV.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["https://*.tradingview.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Export Strategy Trades"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.tradingview.com/*"],
+      "js": ["content.js"]
+    }
+  ]
+}

@@ -171,6 +171,7 @@ def transform_data(data, token):
     transformed = {
         "am": "NO",
         "dq": str(data.get("disclosed_quantity", "0")),
+        "bc": "1",
         "es": reverse_map_exchange(data["exchange"]),
         "mp": "0",
         "pc": data.get("product", "MIS"),
@@ -182,6 +183,7 @@ def transform_data(data, token):
         "tp": _fmt_price(data.get("trigger_price", 0)),
         "ts": symbol,
         "tt": "B" if action == "BUY" else ("S" if action == "SELL" else "None"),
+        "tk": str(token),
     }
 
     transformed["ig"] = _order_tag(data)
