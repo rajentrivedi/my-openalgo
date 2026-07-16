@@ -134,6 +134,7 @@ from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_module_db import init_db as ensure_strategy_module_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
+from database.wishlist_alert_db import init_db as ensure_wishlist_alert_tables_exists
 from database.wishlist_db import init_db as ensure_wishlist_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
@@ -779,6 +780,7 @@ def setup_environment(app):
                 # single-threaded, so the same DDL runs uncontended. See #1750.
                 ("Scheduler Job Stores", ensure_jobstore_tables_exist),
                 ("Wishlist DB", ensure_wishlist_tables_exists),
+                ("Wishlist Alert DB", ensure_wishlist_alert_tables_exists),
             ]
 
             db_init_start = time.time()
