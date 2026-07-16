@@ -1,13 +1,19 @@
 from flask import Blueprint, jsonify, request, session
 
 from database.wishlist_alert_db import (
-    create_alert as db_create_alert,
     count_active_alerts,
-    delete_alert as db_delete_alert,
     delete_alerts_for_wishlist_item,
     get_alert_by_id,
     get_alerts_for_wishlist_item,
     get_user_alerts,
+)
+from database.wishlist_alert_db import (
+    create_alert as db_create_alert,
+)
+from database.wishlist_alert_db import (
+    delete_alert as db_delete_alert,
+)
+from database.wishlist_alert_db import (
     toggle_alert as db_toggle_alert,
 )
 from database.wishlist_db import add_item, get_user_items, remove_item
@@ -55,6 +61,7 @@ def _alert_to_dict(alert):
         "last_checked_at": alert.last_checked_at.isoformat() if alert.last_checked_at else None,
         "created_at": alert.created_at.isoformat() if alert.created_at else None,
     }
+
 
 wishlist_bp = Blueprint("wishlist_bp", __name__, url_prefix="/wishlist")
 
@@ -145,10 +152,16 @@ def create_alert():
         condition_value = data.get("condition_value")
 
         if not item_id or not condition_type or condition_value is None:
-            return jsonify({"error": "wishlist_item_id, condition_type, and condition_value required"}), 400
+            return jsonify(
+                {"error": "wishlist_item_id, condition_type, and condition_value required"}
+            ), 400
 
         if condition_type not in VALID_CONDITIONS:
-            return jsonify({"error": f"Invalid condition_type. Must be one of: {', '.join(sorted(VALID_CONDITIONS))}"}), 400
+            return jsonify(
+                {
+                    "error": f"Invalid condition_type. Must be one of: {', '.join(sorted(VALID_CONDITIONS))}"
+                }
+            ), 400
 
         if condition_value <= 0:
             return jsonify({"error": "condition_value must be positive"}), 400
@@ -166,7 +179,9 @@ def create_alert():
 
                 api_key = get_api_key_for_tradingview(username)
                 if api_key:
-                    auth_token, feed_token, broker = get_auth_token_broker(api_key, include_feed_token=True)
+                    auth_token, feed_token, broker = get_auth_token_broker(
+                        api_key, include_feed_token=True
+                    )
                     if auth_token:
                         success, result, _ = get_quotes_with_auth(
                             auth_token, feed_token, broker, item.symbol, item.exchange
