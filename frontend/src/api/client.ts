@@ -96,7 +96,7 @@ export const webClient = axios.create({
 webClient.interceptors.request.use(
   async (config) => {
     const method = config.method?.toLowerCase()
-    if (method === 'post' || method === 'put' || method === 'delete') {
+    if (method === 'post' || method === 'put' || method === 'patch' || method === 'delete') {
       try {
         const csrfToken = await fetchCSRFToken()
         if (!csrfToken) {
