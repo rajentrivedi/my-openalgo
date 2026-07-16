@@ -7,7 +7,6 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
-    ForeignKey,
     Index,
     Integer,
     String,
@@ -39,9 +38,7 @@ class WishlistAlert(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(String(255), nullable=False, index=True)
-    wishlist_item_id = Column(
-        Integer, ForeignKey("wishlist_items.id", ondelete="CASCADE"), nullable=False
-    )
+    wishlist_item_id = Column(Integer, nullable=False)
     symbol = Column(String(50), nullable=False)
     exchange = Column(String(10), nullable=False, default="NSE")
     condition_type = Column(String(20), nullable=False)
@@ -91,6 +88,7 @@ def create_alert(
         )
         db_session.add(alert)
         db_session.commit()
+        db_session.refresh(alert)
         return alert
     except Exception as e:
         logger.exception(f"Error creating wishlist alert: {str(e)}")
