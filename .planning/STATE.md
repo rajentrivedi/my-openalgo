@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Executing Phase 06
-last_updated: "2026-07-17T04:28:38.227Z"
+last_updated: "2026-07-17T04:32:30.000Z"
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 10
-  completed_plans: 3
+  completed_plans: 5
 ---
 
 # Project State
 
-**Position:** Phase 06, Plans 01 (completed), 02 (planned)
+**Position:** Phase 06, Plans 01-02 (completed)
 **Last Updated:** 2026-07-17
 
 ## Phase 01: Kotak Order Page — Completed
@@ -56,6 +56,7 @@ progress:
 - Both Telegram and WhatsApp dispatched simultaneously on alert trigger
 - FK ON DELETE CASCADE on wishlist_item_id — deleting a wishlist item auto-deletes its alerts
 - [Phase 06]: WeasyPrint 69.0 for HTML->CSS->PDF generation
+- [Phase 06-tools-docs-pdf]: Button placed in header area using flex justify-between layout
 
 ## Phase 03: Wishlist Page — Plan 1 Completed
 
@@ -101,10 +102,18 @@ progress:
 - External URLs (docs.openalgo.in, github, discord) preserved as-is
 - Broker API product names (Motilal `productname: "OpenAlgo"`) preserved — identifies source app to brokers
 
-## Phase 06: Tools Documentation PDF — Planned
+## Phase 06: Tools Documentation PDF — Completed
 
 - Plan 01: Backend — documentation content + PDF generator + Flask endpoint + CLI script
 - Plan 02: Frontend — download button on /tools page + blueprint registration
+
+### Implementation Summary
+
+- `blueprints/tools_docs/` package with docs_data.py, pdf_generator.py, __init__.py
+- Flask blueprint at /api/docs/tools-pdf serving downloadable PDF
+- CLI script at scripts/generate_tools_pdf.py for standalone generation
+- app.py — Blueprint registration for tools_docs_bp
+- frontend/src/pages/Tools.tsx — Download PDF button in header area
 
 ### Decisions
 
@@ -112,6 +121,14 @@ progress:
 - Documentation content stored as Python dataclasses in docs_data.py
 - PDF served from /api/docs/tools-pdf endpoint
 - CLI script at scripts/generate_tools_pdf.py for standalone generation
+- Button placed in header area using flex justify-between layout
+- Native anchor tag with download attribute for simple browser PDF download
+- target='_blank' and rel='noopener noreferrer' for safe PDF opening in new tab
+
+### Commits
+
+- c7b70df6 — feat(06-tools-docs-pdf): register tools_docs blueprint in app.py
+- 244794fe — feat(06-tools-docs-pdf): add PDF download button to Tools page
 
 ## Issues
 
