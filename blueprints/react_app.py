@@ -74,7 +74,7 @@ def serve_react_app():
         return (
             """
         <html>
-        <head><title>OpenAlgo - Frontend Not Available</title></head>
+        <head><title>Quantix - Frontend Not Available</title></head>
         <body style="font-family: system-ui; padding: 40px; max-width: 600px; margin: 0 auto;">
             <h1>Frontend Not Built</h1>
             <p>The React frontend is not available. To build it:</p>

@@ -1467,7 +1467,7 @@ def get_openalgo_version() -> str:
     try:
         import openalgo
 
-        return f"OpenAlgo version: {openalgo.__version__}"
+        return f"Quantix version: {openalgo.__version__}"
     except Exception as e:
         return _fail("getting version", e)
 

@@ -488,7 +488,7 @@ _CONSENT_TEMPLATE = """\
     third-party origin via Referer.
   -->
   <meta name="referrer" content="same-origin">
-  <title>Authorize {{ client_name }} — OpenAlgo</title>
+  <title>Authorize {{ client_name }} — Quantix</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; background: #f9fafb;
            color: #111827; margin: 0; padding: 0; min-height: 100vh; display: flex;
