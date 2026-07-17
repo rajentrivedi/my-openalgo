@@ -21,7 +21,7 @@ const CHUNK_ERROR_PATTERNS = [
   /Failed to load resource.*\.(?:js|mjs|css)/i,
 ]
 
-const RELOAD_FLAG = 'openalgo:chunk-reload-attempted'
+const RELOAD_FLAG = 'quantix:chunk-reload-attempted'
 
 // How long a reload attempt suppresses the next one. A genuine stale-bundle
 // reload fixes itself on the first try, so a second failure inside this window

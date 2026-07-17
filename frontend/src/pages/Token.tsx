@@ -32,7 +32,7 @@ interface SearchHistoryEntry {
   ts: number
 }
 
-const HISTORY_KEY = 'openalgo:search-history'
+const HISTORY_KEY = 'quantix:search-history'
 const HISTORY_MAX = 10
 
 function loadHistory(): SearchHistoryEntry[] {

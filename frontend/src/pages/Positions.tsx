@@ -61,7 +61,7 @@ import type { Position } from '@/types/trading'
 import { showToast } from '@/utils/toast'
 import { EmptyState } from '@/components/ui/empty-state'
 
-const STORAGE_KEY = 'openalgo_positions_prefs'
+const STORAGE_KEY = 'quantix_positions_prefs'
 
 type GroupingType = 'none' | 'underlying' | 'underlying_expiry'
 type SortColumn = 0 | 3 | 4 | 6 | 7 | null
