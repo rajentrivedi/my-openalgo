@@ -47,6 +47,19 @@
 
 ---
 
+## Phase 5: Rebrand to Quantix
+
+**Goal:** Rebrand the application UI, backend responses, and branding assets from "OpenAlgo" to "Quantix", including logo swap, favicon, app title, navbar branding, footer, watermarks, FAQ content, startup banner, API response names, and service messages.
+
+**Requirements:** [BRAND-01, BRAND-02, BRAND-03, BRAND-04]
+
+**Plans:** 3 plans
+- [x] 05-01-PLAN.md — Frontend visual rebranding (logos, navbar, footer, index.html, watermarks)
+- [x] 05-02-PLAN.md — Frontend content rebranding (FAQ, setup, page text, internal keys)
+- [x] 05-03-PLAN.md — Backend rebranding (banner, blueprints, services, TOTP, email)
+
+---
+
 ## Requirements
 
 ### WISH-ALERT-01: Alert Database
@@ -84,6 +97,18 @@ A database model to store wishlist items with fields for symbol, exchange, notes
 
 ### WISH-02: Wishlist API
 REST API endpoints (GET, POST, DELETE) for managing wishlist items, with session-based auth via `@check_session_validity`.
+
+### BRAND-01: Frontend Visual Identity
+All frontend UI elements showing the brand name or logo (navbar, footer, index.html title/meta, favicon, chart watermarks) are updated from "OpenAlgo" to "Quantix" using the new logo assets.
+
+### BRAND-02: Frontend Content References
+All user-facing text content in frontend pages (FAQ, setup flow, broker selection, API playground, flow editor, health check text) that references "OpenAlgo" as the platform name is updated to "Quantix".
+
+### BRAND-03: Backend Branding
+Backend Python files (startup banner, API name response, health checks, system reports, Telegram/WhatsApp messages, TOTP issuer, email sender name, MCP auth page, version info) reflect the new "Quantix" brand name.
+
+### BRAND-04: Brand Asset Integration
+New logo-light.png, logo-dark.png, and favicon.ico are properly referenced from the frontend HTML and components in place of the old OpenAlgo brand assets (logo.png, favicon_0.ico).
 
 ### WISH-03: Wishlist Page
 A dedicated page at `/wishlist` where users can view saved symbols, add new ones via symbol search, set notes/targets, and delete items. Accessible from the main navigation menu.

@@ -2,13 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 04 Complete
-last_updated: "2026-07-16T09:15:00.000Z"
+status: Phase 05 Planned
+last_updated: "2026-07-17T00:00:00.000Z"
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 2
-  total_plans: 6
+  planned_phases: 1
+  total_plans: 9
   completed_plans: 2
+  planned_plans: 3
 ---
 
 # Project State
@@ -86,6 +88,19 @@ progress:
 - Wishlist uses unique composite index on (user_id, symbol) to prevent duplicates
 - DELETE endpoint scopes deletion by both item_id and user_id for security
 - Wishlist page uses autocomplete search via existing `/search/api/search` endpoint with 300ms debounce
+
+## Phase 05: Rebrand to Quantix — Planned
+
+- Plan 01: Frontend visual rebranding (logos, navbar, footer, index.html, watermarks)
+- Plan 02: Frontend content rebranding (FAQ, setup, page text, internal keys)
+- Plan 03: Backend rebranding (banner, blueprints, services, TOTP, email)
+
+### Decisions
+
+- New brand name: "Quantix" (capital Q, rest lowercase)
+- Logo uses theme-aware switching (logo-light.png for light, logo-dark.png for dark)
+- External URLs (docs.openalgo.in, github, discord) preserved as-is
+- Broker API product names (Motilal `productname: "OpenAlgo"`) preserved — identifies source app to brokers
 
 ## Issues
 
