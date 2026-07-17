@@ -330,8 +330,7 @@ def test_message():
                 ), 404
             target_jid = all_users[0]["whatsapp_jid"]
             test_msg = (
-                f"*Test from Quantix (admin: {username})*\n"
-                "Your WhatsApp integration is working."
+                f"*Test from Quantix (admin: {username})*\nYour WhatsApp integration is working."
             )
 
         alert_executor.submit(whatsapp_alert_service.send_alert_sync, target_jid, test_msg)
