@@ -68,7 +68,7 @@
 
 **Plans:** 2 plans
 - [x] 06-01-PLAN.md — Backend: tools documentation content + PDF generator + Flask download endpoint + CLI script
-- [ ] 06-02-PLAN.md — Frontend: download button on /tools page + blueprint registration
+- [x] 06-02-PLAN.md — Frontend: download button on /tools page + blueprint registration
 
 ---
 

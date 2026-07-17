@@ -18,3 +18,10 @@
 - Gunicorn -w 1 always
 - SQLite NullPool only
 - ZMQ: SUB binds, PUBs connect
+
+## Phase 06 Complete
+
+Phase 06 (Tools Documentation PDF) completed 2026-07-17:
+- `blueprints/tools_docs/` package with structured docs data, WeasyPrint PDF generator, and Flask download endpoint at `/api/docs/tools-pdf`
+- Download button on `/tools` page for one-click PDF access
+- CLI script at `scripts/generate_tools_pdf.py` for standalone generation
