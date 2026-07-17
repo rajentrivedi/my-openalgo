@@ -34,7 +34,7 @@ if __name__ == "__main__":
     _debug = os.getenv("FLASK_DEBUG", "False").lower() in ("true", "1", "t")
     _is_reloader_parent = _debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
     if not _is_reloader_parent:
-        print("\033[93mStarting OpenAlgo...\033[0m", flush=True)
+        print("\033[93mStarting Quantix...\033[0m", flush=True)
 
 import mimetypes
 
@@ -114,7 +114,8 @@ from blueprints.vol_surface import vol_surface_bp  # Import the vol surface blue
 from blueprints.watchlist import watchlist_bp  # Import the charting watchlist blueprint
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 from blueprints.whatsapp import whatsapp_bp  # Import the WhatsApp blueprint
-from blueprints.wishlist import wishlist_bp  # Import the Wishlist blueprint
+from blueprints.wishlist import wishlist_bp  # Import the wishlist blueprint
+from blueprints.tools_docs import tools_docs_bp  # Import the Tools Documentation PDF blueprint
 from cors import init_cors
 from csp import apply_csp_middleware  # Import the CSP middleware
 from database.action_center_db import init_db as ensure_action_center_tables_exists
@@ -355,6 +356,9 @@ def create_app():
     app.register_blueprint(strategy_portfolio_bp)  # Register Strategy Portfolio blueprint
     app.register_blueprint(postback_bp)  # Register broker postback (order-update webhook) blueprint
     app.register_blueprint(wishlist_bp)  # Register Wishlist blueprint
+
+    # Tools Documentation PDF download
+    app.register_blueprint(tools_docs_bp)  # Register Tools Documentation PDF blueprint
 
     # Remote MCP (HTTP + OAuth) — opt-in via MCP_HTTP_ENABLED. Off by default.
     # Pre-flight refusal: must NEVER coexist with FLASK_DEBUG=True (debug-mode
@@ -1193,7 +1197,7 @@ if __name__ == "__main__":
         def _vl(t):
             return len(_ae.sub("", t))
 
-        _t = f" OpenAlgo v{_ver} "
+        _t = f" Quantix v{_ver} "
         _sl = "Your Personal Algo Trading Platform"
         _samps = [
             "",
