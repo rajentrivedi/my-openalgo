@@ -60,7 +60,7 @@ class EmailSendError(Exception):
     pass
 
 
-def send_test_email(recipient_email, sender_name="OpenAlgo Admin"):
+def send_test_email(recipient_email, sender_name="Quantix Admin"):
     """
     Send a test email to verify SMTP configuration.
 
