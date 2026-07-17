@@ -254,7 +254,7 @@ export default function RemoteMcp() {
       // banner on reloads until the running process actually picks them up.
       localStorage.setItem(RESTART_PENDING_KEY, JSON.stringify(pendingSettings))
       setRestartPending(pendingSettings)
-      showToast.success('Saved. Restart the openalgo service to apply.', 'admin')
+      showToast.success('Saved. Restart the Quantix service to apply.', 'admin')
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
@@ -440,7 +440,7 @@ export default function RemoteMcp() {
                 placeholder="https://yourdomain.com"
               />
               <p className="text-xs text-muted-foreground">
-                Same as your OpenAlgo dashboard URL. Required when MCP is enabled. Used as the JWT
+                Same as your Quantix dashboard URL. Required when MCP is enabled. Used as the JWT
                 issuer / audience claim — tokens are scoped to this exact origin.
               </p>
             </div>
