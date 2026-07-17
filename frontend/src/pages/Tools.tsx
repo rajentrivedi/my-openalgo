@@ -1,5 +1,6 @@
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, FileDown } from 'lucide-react'
 import { Link } from 'react-router'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { tools } from '@/lib/tools'
 
@@ -7,11 +8,24 @@ export default function Tools() {
   return (
     <div className="py-6 space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">Tools</h1>
-        <p className="text-muted-foreground mt-1">
-          Analytical tools for options trading and market analysis
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Tools</h1>
+          <p className="text-muted-foreground mt-1">
+            Analytical tools for options trading and market analysis
+          </p>
+        </div>
+        <a
+          href="/api/docs/tools-pdf"
+          download="quantix-tools-reference-guide.pdf"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <Button variant="outline" className="gap-2">
+            <FileDown className="h-4 w-4" />
+            Download PDF
+          </Button>
+        </a>
       </div>
 
       {/* Tool Cards Grid */}
