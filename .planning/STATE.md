@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Milestone complete
-last_updated: "2026-07-17T04:34:49.878Z"
+last_updated: "2026-07-17T06:46:56.429Z"
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 10
-  completed_plans: 4
+  completed_plans: 6
 ---
 
 # Project State
@@ -57,6 +57,8 @@ progress:
 - FK ON DELETE CASCADE on wishlist_item_id — deleting a wishlist item auto-deletes its alerts
 - [Phase 06]: WeasyPrint 69.0 for HTML->CSS->PDF generation
 - [Phase 06-tools-docs-pdf]: Button placed in header area using flex justify-between layout
+- [Phase 05-rebrand-quantix]: Logo uses theme-aware switching (logo-light.png / logo-dark.png) based on mode
+- [Phase 05-rebrand-quantix]: External URLs (docs.openalgo.in) preserved as-is
 
 ## Phase 03: Wishlist Page — Plan 1 Completed
 
