@@ -60,7 +60,31 @@
 
 ---
 
+## Phase 6: Tools Documentation PDF
+
+**Goal:** Generate a comprehensive PDF reference document documenting all 15 analytical tools available on the `/tools` route, with detailed descriptions, key features, usage instructions, API endpoints, and practical examples for each tool.
+
+**Requirements:** [DOC-01, DOC-02, DOC-03, DOC-04]
+
+**Plans:** 2 plans
+- [ ] 06-01-PLAN.md — Backend: tools documentation content + PDF generator + Flask download endpoint + CLI script
+- [ ] 06-02-PLAN.md — Frontend: download button on /tools page + blueprint registration
+
+---
+
 ## Requirements
+
+### DOC-01: Tools Documentation Content
+Comprehensive documentation content for all 15 tools on the /tools route, including overview, key features, usage instructions, API endpoints, practical examples, and configuration notes for each tool.
+
+### DOC-02: PDF Generation
+A Python script and/or Flask endpoint that generates a professional PDF from the documentation content using WeasyPrint (HTML->CSS->PDF), with cover page, table of contents, and professional styling.
+
+### DOC-03: Usage Examples
+Each tool documented with practical, real-world usage examples demonstrating how to use the tool effectively in common trading scenarios.
+
+### DOC-04: Frontend Access
+A download button on the /tools page that triggers PDF download from /api/docs/tools-pdf.
 
 ### WISH-ALERT-01: Alert Database
 A database model for wishlist alerts with fields for wishlist_item_id, user_id, condition_type (target_above, target_below, percent_up, percent_down), condition_value, reference_price, is_active, triggered status, and timestamps.

@@ -2,21 +2,21 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Phase 05 Planned
+status: Phase 06 Planned
 last_updated: "2026-07-17T00:00:00.000Z"
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 2
-  planned_phases: 1
-  total_plans: 9
+  planned_phases: 2
+  total_plans: 11
   completed_plans: 2
-  planned_plans: 3
+  planned_plans: 5
 ---
 
 # Project State
 
-**Position:** Phase 04, Plan 01 (completed)
-**Last Updated:** 2026-07-16
+**Position:** Phase 06, Plan 01-02 (planned)
+**Last Updated:** 2026-07-17
 
 ## Phase 01: Kotak Order Page — Completed
 
@@ -101,6 +101,18 @@ progress:
 - Logo uses theme-aware switching (logo-light.png for light, logo-dark.png for dark)
 - External URLs (docs.openalgo.in, github, discord) preserved as-is
 - Broker API product names (Motilal `productname: "OpenAlgo"`) preserved — identifies source app to brokers
+
+## Phase 06: Tools Documentation PDF — Planned
+
+- Plan 01: Backend — documentation content + PDF generator + Flask endpoint + CLI script
+- Plan 02: Frontend — download button on /tools page + blueprint registration
+
+### Decisions
+
+- Use WeasyPrint for PDF generation (HTML->CSS->PDF)
+- Documentation content stored as Python dataclasses in docs_data.py
+- PDF served from /api/docs/tools-pdf endpoint
+- CLI script at scripts/generate_tools_pdf.py for standalone generation
 
 ## Issues
 
