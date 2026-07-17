@@ -114,8 +114,8 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
                 className="flex items-center gap-2 px-2"
                 onClick={() => setMobileOpen(false)}
               >
-                <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
-                <span className="font-semibold">OpenAlgo</span>
+                <img src={mode === 'dark' ? '/logo-dark.png' : '/logo-light.png'} alt="Quantix" className="h-8 w-8" />
+                <span className="font-semibold">Quantix</span>
               </Link>
 
               {/* Secondary nav items (not in bottom nav) */}
@@ -203,8 +203,8 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
 
         {/* Logo */}
         <Link to="/dashboard" className="flex items-center gap-2 mr-6">
-          <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
-          <span className="hidden font-semibold sm:inline-block">OpenAlgo</span>
+          <img src={mode === 'dark' ? '/logo-dark.png' : '/logo-light.png'} alt="Quantix" className="h-8 w-8" />
+          <span className="hidden font-semibold sm:inline-block">Quantix</span>
         </Link>
 
         {/* Desktop Navigation.
