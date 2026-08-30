@@ -105,6 +105,9 @@ def prev_day_features(con, date_ist):
         FROM market_data
         WHERE "timestamp" BETWEEN ? AND ?
           AND NOT (strftime('%H', to_timestamp("timestamp") + INTERVAL '5.5 hours') = '18')
+          AND open > 0 AND high > 0 AND low > 0 AND close > 0
+          AND high >= low
+        ORDER BY symbol, "timestamp"
         """,
         [ss, se],
     ).fetchdf()
@@ -116,21 +119,28 @@ def prev_day_features(con, date_ist):
         .dt.tz_localize(None)
     )
     bars["time"] = bars["datetime"].dt.strftime("%H:%M")
+    bars["seq0"] = bars.groupby("symbol")["time"].cumcount()
     bars["notional"] = bars["volume"] * bars["close"]
     bars["ret"] = bars.groupby("symbol")["close"].pct_change()
     bars["vol_ratio"] = bars["volume"] / bars.groupby("symbol")["volume"].transform("mean")
     bars = bars[bars["time"].between(config.SESSION_START, config.SESSION_END)]
 
     def agg(g):
+        g = g.reset_index(drop=True)
+        try:
+            open_5m = (
+                g.loc[g["time"] == "09:20", "open"].iloc[0]
+                / g.loc[g["time"] == "09:15", "open"].iloc[0]
+            )
+        except IndexError:
+            open_5m = g.loc[g["seq0"] == 5, "open"].iloc[0] / g.loc[g["seq0"] == 0, "open"].iloc[0]
         return pd.Series(
             {
                 "prev_vol_pct": g["ret"].std() * 100.0,
                 "prev_rvol_median": g["vol_ratio"].median(),
                 "prev_notional_median": g["notional"].median(),
                 "prev_daily_notional_cr": g["notional"].sum() / 1e7,
-                "prev_ret_5m": g.loc[g["time"] == "09:20", "open"].iloc[0]
-                / g.loc[g["time"] == "09:15", "open"].iloc[0]
-                - 1.0,
+                "prev_ret_5m": open_5m - 1.0,
             }
         )
 

@@ -60,10 +60,18 @@ def _entry_mask(vals, df, p):
 def run_strategy(df, params=None, cost=0.001):
     p = {**DEFAULT_PARAMS, **(params or {})}
     df = df.reset_index(drop=True)
+    if len(df) == 0:
+        return Analysis()
+    vals = signals.build_frame(df, p)
+    return run_with_frame(df, vals, p, cost=cost)
+
+
+def run_with_frame(df, vals, params, cost=0.001):
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    df = df.reset_index(drop=True)
     n = len(df)
     if n == 0:
         return Analysis()
-    vals = signals.build_frame(df, p)
     mask = _entry_mask(vals, df, p)
 
     dt = df["datetime"].to_numpy()
