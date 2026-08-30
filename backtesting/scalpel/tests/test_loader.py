@@ -1,10 +1,10 @@
 import math
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import duckdb
 import pandas as pd
 import pytest
-from zoneinfo import ZoneInfo
 
 from backtesting.scalpel import loader
 
@@ -33,7 +33,24 @@ def seed_days(con, symbols, n_days=25, start="2025-01-06"):
             for m in range(375):
                 o = open_d + (0.5 if m == 5 else 0.0)
                 c = open_d + 1.0 + 0.001 * math.sin(m)
-                rows.append((sym, "NSE", "1m", ts(day.strftime("%Y-%m-%d"), f"{9 + (m + 15) // 60:02d}:{(m + 15) % 60:02d}"), o, open_d + 1.5, open_d - 1.5, c, vol, 0, None))
+                rows.append(
+                    (
+                        sym,
+                        "NSE",
+                        "1m",
+                        ts(
+                            day.strftime("%Y-%m-%d"),
+                            f"{9 + (m + 15) // 60:02d}:{(m + 15) % 60:02d}",
+                        ),
+                        o,
+                        open_d + 1.5,
+                        open_d - 1.5,
+                        c,
+                        vol,
+                        0,
+                        None,
+                    )
+                )
     con.executemany("INSERT INTO market_data VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
     return days
 
@@ -42,7 +59,7 @@ def seed_days(con, symbols, n_days=25, start="2025-01-06"):
 def con():
     c = duckdb.connect()
     c.execute(SCHEMA)
-    days = seed_days(c, ["TEST", "THIN"])
+    seed_days(c, ["TEST", "THIN"])
     return c
 
 

@@ -1,9 +1,9 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import duckdb
 import pandas as pd
 import pytest
-from zoneinfo import ZoneInfo
 
 from backtesting.scalpel import config, hygiene
 

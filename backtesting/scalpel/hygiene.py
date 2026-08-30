@@ -19,7 +19,11 @@ def clean_1m_series(con, symbol, start_epoch, end_epoch):
     if not rows:
         return pd.DataFrame(columns=FINAL_COLS)
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume", "oi"])
-    local = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.tz_convert(config.SESSION_TZ).dt.tz_localize(None)
+    local = (
+        pd.to_datetime(df["timestamp"], unit="s", utc=True)
+        .dt.tz_convert(config.SESSION_TZ)
+        .dt.tz_localize(None)
+    )
     df["datetime"] = local
     session_mask = local.dt.strftime("%H:%M").between(config.SESSION_START, config.SESSION_END)
     df = df[session_mask]

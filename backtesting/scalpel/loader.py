@@ -110,7 +110,11 @@ def prev_day_features(con, date_ist):
     ).fetchdf()
     if bars.empty:
         return pd.DataFrame(columns=FEATURE_COLS)
-    bars["datetime"] = pd.to_datetime(bars["timestamp"], unit="s", utc=True).dt.tz_convert(config.SESSION_TZ).dt.tz_localize(None)
+    bars["datetime"] = (
+        pd.to_datetime(bars["timestamp"], unit="s", utc=True)
+        .dt.tz_convert(config.SESSION_TZ)
+        .dt.tz_localize(None)
+    )
     bars["time"] = bars["datetime"].dt.strftime("%H:%M")
     bars["notional"] = bars["volume"] * bars["close"]
     bars["ret"] = bars.groupby("symbol")["close"].pct_change()
@@ -124,13 +128,17 @@ def prev_day_features(con, date_ist):
                 "prev_rvol_median": g["vol_ratio"].median(),
                 "prev_notional_median": g["notional"].median(),
                 "prev_daily_notional_cr": g["notional"].sum() / 1e7,
-                "prev_ret_5m": g.loc[g["time"] == "09:20", "open"].iloc[0] / g.loc[g["time"] == "09:15", "open"].iloc[0] - 1.0,
+                "prev_ret_5m": g.loc[g["time"] == "09:20", "open"].iloc[0]
+                / g.loc[g["time"] == "09:15", "open"].iloc[0]
+                - 1.0,
             }
         )
 
     intra = bars.groupby("symbol").apply(agg, include_groups=False).reset_index()
 
-    out = d1[["symbol", "prev_gap_pct", "prev_trend_pct", "prev_close_to_high"]].merge(intra, on="symbol", how="left")
+    out = d1[["symbol", "prev_gap_pct", "prev_trend_pct", "prev_close_to_high"]].merge(
+        intra, on="symbol", how="left"
+    )
     out["prev_date"] = pd_
     out["is_liquid"] = out["prev_daily_notional_cr"] >= config.LIQUIDITY_GATE_CR
     out = out[FEATURE_COLS].sort_values("symbol").reset_index(drop=True)
@@ -156,12 +164,16 @@ def notional_medians(con, start_epoch, end_epoch, use_cache=True):
     meta_path = os.path.join(config.CACHE_DIR, "notional_medians.meta")
     if use_cache and os.path.exists(cache_path) and os.path.exists(meta_path):
         meta = pd.read_csv(meta_path, index_col=0)
-        if int(meta.loc["start", "v"]) == int(start_epoch) and int(meta.loc["end", "v"]) == int(end_epoch):
+        if int(meta.loc["start", "v"]) == int(start_epoch) and int(meta.loc["end", "v"]) == int(
+            end_epoch
+        ):
             df = pd.read_parquet(cache_path)
-            return dict(zip(df["symbol"], df["notional"]))
+            return dict(zip(df["symbol"], df["notional"], strict=True))
     medians = _median_notional(con, start_epoch, end_epoch)
     df = pd.DataFrame({"symbol": list(medians.keys()), "notional": list(medians.values())})
     os.makedirs(config.CACHE_DIR, exist_ok=True)
     df.to_parquet(cache_path, index=False)
-    pd.DataFrame({"k": ["start", "end"], "v": [start_epoch, end_epoch]}).to_csv(meta_path, index=False)
+    pd.DataFrame({"k": ["start", "end"], "v": [start_epoch, end_epoch]}).to_csv(
+        meta_path, index=False
+    )
     return medians
