@@ -79,7 +79,23 @@ All 60 perturbations (6 folds × 5 params × 2 directions) remain net-negative P
 
 ---
 
-## Diagnosis (why it fails)
+## Exit-Design Scan (alternative exits, frozen fitted entries, OOS)
+
+Follow-up to test whether the breach is exit design (wide stops, high/no breakeven trigger). `stop_r` was wired into the engine as the risk multiple (initial stop, profit trigger, and trail all scale with it); `proftrigger_r=999` disables the breakeven conversion.
+
+| stop_r | proftrigger_r | OOS n | weighted PF | net ret |
+|---|---|---|---|---|
+| 1.0 | 1.0 | 4361 | 0.420 | −764% |
+| 1.0 | 2.0 (baseline) | 4054 | 0.478 | −684% |
+| 1.0 | 3.0 | 3985 | 0.485 | −669% |
+| 1.0 | 999 (no breakeven) | 3952 | 0.489 | −662% |
+| 1.5 | 3.0 | 3608 | 0.507 | −615% |
+| 2.0 | 3.0 / 999 | 3441 | 0.514 | −581% |
+| **3.0** | **3.0 / 999** | 3334 | **0.522** | **−553%** |
+
+Every alternative exit improves on the baseline, but the gradient saturates far below profitability: the best cell reaches PF ~0.52, still <0.5 of the 1.3 bar. **Conclusion: the exit design is not the binding constraint.** The gap is entry value relative to transaction cost (gross PF 1.157, net 0.47 at the baseline). No choice of stop/trail/trigger turns this candidate into a net winner.
+
+## Final Diagnosis (why it fails)
 
 1. **Marginal gross edge, lethal cost drag.** Gross PV ≈ 1.157 is real but ~3 bps/trade average gross move after a 31% win rate; 20 bps round-trip cost removes 6× the gross edge (net ≈ −17 bps/trade).
 2. **Entry threshold too eager / win rate too low.** `bbpct_thr=0` + `rsi_thr=15` fires frequently (mean 3.75 trades/symbol-day) in weak reversion conditions; longer-stop/selective variants were never net-positive either (Gate-1 fixed-hold sweep → see `edge_map.py`).
@@ -89,7 +105,7 @@ All 60 perturbations (6 folds × 5 params × 2 directions) remain net-negative P
 
 - **Cost reduction first:** institutional exchange-optimized pricing (~3–5 bps rt) would flip PF toward ~1.0; still not ≥1.3.
 - **Selective entries:** raise `min_rvol`, tighten `rsi_thr` + add extension-colocation filter (only fade when prior-day move was extreme), reduce trades to ≤1/symbol-day.
-- **Wider stop / no breakeven trigger:** test `stop_r ∈ {2,3}`, `proftrigger_r ∈ {3,4}`, and hold-to-hard-exit with strong-fade conditions only.
+- **Wider stop / no breakeven trigger:** tested above — `stop_r ∈ {2,3}`, `proftrigger_r ∈ {3,999}` improves PF only to ~0.52; exit design is **not** the binding constraint. A structural entry/timing change, not exit tuning, is required for any path forward.
 - **Time-of-day regime:** open-window-only entries (09:15–10:15) with daily max 1 trade, documented in report if tested.
 
 ---

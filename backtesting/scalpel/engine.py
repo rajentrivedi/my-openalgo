@@ -89,6 +89,7 @@ def run_with_frame(df, vals, params, cost=0.001):
     entry_bar = -1
     entry_price = 0.0
     stop_dist = 0.0
+    risk_d = 0.0
     stop_level = 0.0
     trigger_dist = 0.0
     trail_ref = 0.0
@@ -109,7 +110,7 @@ def run_with_frame(df, vals, params, cost=0.001):
                 else:
                     exit_price = close[k]
                     exit_reason = "max_hold"
-                r = ((exit_price - entry_price) / stop_dist) * pos
+                r = ((exit_price - entry_price) / risk_d) * pos
                 gross = ((exit_price / entry_price) - 1.0) * pos
                 ret = gross - 2.0 * cost
                 cum_ret += ret
@@ -122,6 +123,7 @@ def run_with_frame(df, vals, params, cost=0.001):
                         "entry": entry_price,
                         "exit": exit_price,
                         "stop_dist": stop_dist,
+                        "stop_r": float(p["stop_r"]),
                         "r": r,
                         "ret_pct": ret,
                         "exit_reason": exit_reason,
@@ -129,21 +131,21 @@ def run_with_frame(df, vals, params, cost=0.001):
                     }
                 )
                 pos = 0
-        if pos != 0:
-            if pos > 0:
-                if close[k] > trail_ref:
-                    trail_ref = close[k]
-                if not be_done and (close[k] - entry_price) >= trigger_dist:
-                    be_done = True
-                if be_done:
-                    stop_level = max(stop_level, entry_price, trail_ref - p["trail_r"] * stop_dist)
-            else:
-                if close[k] < trail_ref:
-                    trail_ref = close[k]
-                if not be_done and (entry_price - close[k]) >= trigger_dist:
-                    be_done = True
-                if be_done:
-                    stop_level = min(stop_level, entry_price, trail_ref + p["trail_r"] * stop_dist)
+            if pos != 0:
+                if pos > 0:
+                    if close[k] > trail_ref:
+                        trail_ref = close[k]
+                    if not be_done and (close[k] - entry_price) >= trigger_dist:
+                        be_done = True
+                    if be_done:
+                        stop_level = max(stop_level, entry_price, trail_ref - p["trail_r"] * risk_d)
+                else:
+                    if close[k] < trail_ref:
+                        trail_ref = close[k]
+                    if not be_done and (entry_price - close[k]) >= trigger_dist:
+                        be_done = True
+                    if be_done:
+                        stop_level = min(stop_level, entry_price, trail_ref + p["trail_r"] * risk_d)
         if pos == 0 and mask[k] != 0:
             pos = int(mask[k])
             entry_bar = k
@@ -152,9 +154,10 @@ def run_with_frame(df, vals, params, cost=0.001):
             if not (np.isfinite(sd) and sd > 0):
                 sd = abs(close[k]) * 0.002
             stop_dist = sd
-            trigger_dist = p["proftrigger_r"] * stop_dist
+            risk_d = sd * max(p["stop_r"], 1e-9)
+            trigger_dist = p["proftrigger_r"] * risk_d
             trail_ref = entry_price
-            stop_level = entry_price - pos * stop_dist
+            stop_level = entry_price - pos * risk_d
             be_done = False
         equity[k] = 1.0 + cum_ret
     equity[n - 1] = 1.0 + cum_ret
