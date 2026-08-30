@@ -74,6 +74,7 @@ def build_frame(df, params=None):
     or_fade = (close - or_low) / atr5
 
     out = {
+        "vwap": vwap.to_numpy(),
         "vwap_z": vwap_z.to_numpy(),
         "rsi2": rsi2.to_numpy(),
         "bbpct": bbpct.to_numpy(),
