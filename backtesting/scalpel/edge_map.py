@@ -18,7 +18,7 @@ MIN_N = 200
 
 
 def _tb_idx(hms):
-    for i, (name, lo, hi) in enumerate(TIME_BUCKETS):
+    for i, (_, lo, hi) in enumerate(TIME_BUCKETS):
         if lo <= hms < hi:
             return i + 1
     return 0
@@ -57,21 +57,27 @@ def edge_expectancy(con, symbols, start_epoch, end_epoch, params=None):
         df = hygiene.clean_1m_series(con, symbol, start_epoch, end_epoch)
         if df.empty:
             continue
-        df = df[~df["datetime"].dt.strftime("%Y-%m-%d").isin(config.BAD_DAYS)].reset_index(drop=True)
+        df = df[~df["datetime"].dt.strftime("%Y-%m-%d").isin(config.BAD_DAYS)].reset_index(
+            drop=True
+        )
         vals = signals.build_frame(df, params)
         hms = df["datetime"].dt.strftime("%H:%M")
         tb = hms.map(_tb_idx).to_numpy()
         close = df["close"].to_numpy(dtype=float)
         trend_up = (close > vals["vwap"]).astype(int)
         atr_edges = _quantile_edges(vals["atr1"])
-        a_q = _quantile_bucket(vals["atr1"], atr_edges) if atr_edges else np.zeros(len(df), dtype=int)
+        a_q = (
+            _quantile_bucket(vals["atr1"], atr_edges) if atr_edges else np.zeros(len(df), dtype=int)
+        )
         day = df["datetime"].dt.strftime("%Y-%m-%d").to_numpy()
         for h in HOLDS:
             fwd = np.full(len(df), np.nan)
             for d in pd.unique(day):
                 m = day == d
                 sub_close = close[m]
-                fwd[m] = np.log(np.concatenate([sub_close[h:], np.full(min(h, len(sub_close)), np.nan)])) - np.log(sub_close)
+                fwd[m] = np.log(
+                    np.concatenate([sub_close[h:], np.full(min(h, len(sub_close)), np.nan)])
+                ) - np.log(sub_close)
             blocks = []
             for sig in signals.SIGNALS:
                 edges = _quantile_edges(vals[sig])
@@ -154,8 +160,12 @@ def run_study(con, top_symbols, start_epoch, end_epoch, out_dir=None):
             "Net = gross forward return minus 20 bps round-trip cost (applied for hold>=3).\n"
             "Forward returns computed within the same trading day only.\n\n"
         )
-        f.write("## Best cell per signal (max net bps across time-bucket x quantile x ATR-quintile x trend)\n\n")
-        f.write("| signal | hold | tb | q | atr_q | trend | n | gross bps | net bps | hit | PF |\n|---|---|---|---|---|---|---|---|---|---|---|\n")
+        f.write(
+            "## Best cell per signal (max net bps across time-bucket x quantile x ATR-quintile x trend)\n\n"
+        )
+        f.write(
+            "| signal | hold | tb | q | atr_q | trend | n | gross bps | net bps | hit | PF |\n|---|---|---|---|---|---|---|---|---|---|---|\n"
+        )
         for _, r in bests.iterrows():
             f.write(
                 f"| {r['signal']} | {int(r['hold'])} | {r['time_bucket']} | {int(r['q'])} | {int(r['a_q'])} | {r['trend']} | {int(r['n'])} | {r['gross_bps']:.3f} | {r['net_bps']:.3f} | {r['hit']:.4f} | {r['pf']:.3f} |\n"
