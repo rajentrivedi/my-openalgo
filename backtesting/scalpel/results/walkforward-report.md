@@ -95,6 +95,21 @@ Follow-up to test whether the breach is exit design (wide stops, high/no breakev
 
 Every alternative exit improves on the baseline, but the gradient saturates far below profitability: the best cell reaches PF ~0.52, still <0.5 of the 1.3 bar. **Conclusion: the exit design is not the binding constraint.** The gap is entry value relative to transaction cost (gross PF 1.157, net 0.47 at the baseline). No choice of stop/trail/trigger turns this candidate into a net winner.
 
+---
+
+## Top-10 Liquidity Concentration Scan
+
+Follow-up to the question "can it be made profitable on the top-10 most liquid scripts?" — rebuilt the feature set for the 10 highest-median-notional symbols (RELIANCE, HDFCBANK, ICICIBANK, SBIN, BHARTIARTL, INFY, TCS, BSE, ETERNAL, M&M; 4,940 symbol-days) and re-ran the identical 6-fold walk-forward with an optimistic cost sweep:
+
+| Cost (rt) | OOS n | OOS PF | Net ret | Win rate | rob PF range |
+|---|---|---|---|---|---|
+| 20 bps (baseline) | 3203 | 0.304 | −583% | 26.3% | 0.225–0.421 |
+| 10 bps | 3203 | 0.573 | −263% | 34.7% | 0.476–0.705 |
+| 5 bps | 3203 | 0.801 | −103% | 39.9% | 0.690–0.957 |
+| 0 bps (gross) | 3203 | 1.136 | +58% | 46.9% | — |
+
+**Result: concentrating on the top-10 DOES NOT help — it makes it worse.** At the standard 20 bps the concentrated version is *below* the top-100 result (PF 0.304 vs 0.470) because the shallow-per-trade edge (avg gross move +1.8 bps/trade) has no room to absorb cost and concentration reduces the diversification that masked the cost drag. The breakeven cost is between 0 and 5 bps round-trip — below what any realistic NSE execution (even institutional scale) achieves. **No cost assumption reachable in practice makes the top-10 version profitable; the gross signal itself is weaker on these names (gross PF 1.136 vs 1.157 on top-100).**
+
 ## Final Diagnosis (why it fails)
 
 1. **Marginal gross edge, lethal cost drag.** Gross PV ≈ 1.157 is real but ~3 bps/trade average gross move after a 31% win rate; 20 bps round-trip cost removes 6× the gross edge (net ≈ −17 bps/trade).

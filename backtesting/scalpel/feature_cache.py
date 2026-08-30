@@ -49,9 +49,10 @@ def _universe(con, top_n):
     return medians.nlargest(top_n).index.tolist()
 
 
-def compute_daily_features(con, rebuild=False, top_n=UNIVERSE_TOP_N):
-    if (not rebuild) and os.path.exists(FEATURE_CACHE_PATH):
-        return pd.read_parquet(FEATURE_CACHE_PATH)
+def compute_daily_features(con, rebuild=False, top_n=UNIVERSE_TOP_N, cache_path=None):
+    path = FEATURE_CACHE_PATH if cache_path is None else cache_path
+    if (not rebuild) and os.path.exists(path):
+        return pd.read_parquet(path)
     cal = loader.trading_calendar(con)
     date_set = {d.date().isoformat() for d in cal}
     rows = []
@@ -67,7 +68,7 @@ def compute_daily_features(con, rebuild=False, top_n=UNIVERSE_TOP_N):
     out = pd.concat(rows, ignore_index=True)
     out["prev_daily_notional_cr"] = out["prev_daily_notional_cr"].clip(upper=1e6)
     os.makedirs(config.CACHE_DIR, exist_ok=True)
-    out.to_parquet(FEATURE_CACHE_PATH, index=False)
+    out.to_parquet(path, index=False)
     return out
 
 
