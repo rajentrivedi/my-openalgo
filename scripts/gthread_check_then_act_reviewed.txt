@@ -33,3 +33,4 @@ utils/logging.py::SensitiveDataFilter.filter::record.stack_info  # benign: each 
 upgrade/migrate_smtp_simple.py::setup_unicode_output::sys.stdout  # benign: a one-shot command line migration, single threaded
 
 # --- Real races, fixes owned elsewhere --------------------------------------
+services/scalpsurge_service.py::fetch_bars::df.index  # benign: a DataFrame built inside this call from the broker response, never shared

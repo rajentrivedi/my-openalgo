@@ -670,7 +670,7 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
 
         # Ensure timestamp is integer (epoch seconds)
         if df["timestamp"].dtype != "int64":
-            df["timestamp"] = pd.to_datetime(df["timestamp"]).astype("int64") // 10**9
+            df["timestamp"] = pd.to_datetime(df["timestamp"]).astype("datetime64[ns]").astype("int64") // 10**9
 
         # Select only required columns in correct order
         df = df[
@@ -1738,15 +1738,15 @@ def import_from_csv(
                 # else: Already epoch seconds, no conversion needed
             else:
                 # Parse as datetime string
-                df["timestamp"] = pd.to_datetime(df["timestamp"]).astype("int64") // 10**9
+                df["timestamp"] = pd.to_datetime(df["timestamp"]).astype("datetime64[ns]").astype("int64") // 10**9
         elif "datetime" in df.columns:
-            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("int64") // 10**9
+            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("datetime64[ns]").astype("int64") // 10**9
         elif "date" in df.columns:
             if "time" in df.columns:
                 df["datetime"] = df["date"].astype(str) + " " + df["time"].astype(str)
             else:
                 df["datetime"] = df["date"].astype(str)
-            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("int64") // 10**9
+            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("datetime64[ns]").astype("int64") // 10**9
         else:
             return False, "CSV must have 'timestamp', 'datetime', or 'date' column", 0
 
@@ -1834,15 +1834,15 @@ def import_from_parquet(
                 if first_val > 1e12:
                     df["timestamp"] = df["timestamp"] // 1000
             else:
-                df["timestamp"] = pd.to_datetime(df["timestamp"]).astype("int64") // 10**9
+                df["timestamp"] = pd.to_datetime(df["timestamp"]).astype("datetime64[ns]").astype("int64") // 10**9
         elif "datetime" in df.columns:
-            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("int64") // 10**9
+            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("datetime64[ns]").astype("int64") // 10**9
         elif "date" in df.columns:
             if "time" in df.columns:
                 df["datetime"] = df["date"].astype(str) + " " + df["time"].astype(str)
             else:
                 df["datetime"] = df["date"].astype(str)
-            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("int64") // 10**9
+            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("datetime64[ns]").astype("int64") // 10**9
         else:
             return False, "Parquet must have 'timestamp', 'datetime', or 'date' column", 0
 

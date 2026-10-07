@@ -167,6 +167,9 @@ dependencies = [
   "litellm==1.99.0",
   "agno==3.0.5",
   "ddgs>=9.16.0",
+  "vectorbt>=1.0.0",
+  "ta-lib>=0.7.1",
+  "yfinance>=1.5.1",
 ]
 
 [build-system]

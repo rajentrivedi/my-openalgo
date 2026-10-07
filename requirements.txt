@@ -159,3 +159,12 @@ openscript==0.8.1
 litellm==1.99.0
 agno==3.0.5
 ddgs>=9.16.0
+
+# Backtesting and charting research dependencies (mirrored from pyproject.toml).
+# ta-lib is C-backed: on Alpine/Debian slim images it needs the build toolchain
+# (build-essential, python3-dev, libta-lib-dev) present before pip runs.
+ta-lib>=0.7.1
+vectorbt>=1.0.0
+yfinance>=1.5.1
+# PDF generation for the Tools documentation page (backend/blueprints/tools_docs).
+weasyprint>=64.0

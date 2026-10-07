@@ -252,6 +252,8 @@ export default function Wishlist() {
     setIsLoading(true)
     await fetchItems()
     await fetchAlerts()
+    // Force refresh LTP via REST API
+    await refreshAllLtp()
     showToast.success('Wishlist refreshed', 'actionCenter')
   }
 
@@ -283,6 +285,44 @@ export default function Wishlist() {
       await fetchAlerts()
     } catch {
       showToast.error('Failed to toggle alert', 'actionCenter')
+    }
+  }
+
+  // Refresh LTP for all wishlist items via REST API
+  const refreshAllLtp = async () => {
+    if (items.length === 0) return
+    try {
+      const uniqueSymbols = new Map<string, { symbol: string; exchange: string }>()
+      items.forEach((item) => {
+        const key = `${item.exchange}:${item.symbol}`
+        if (!uniqueSymbols.has(key)) {
+          uniqueSymbols.set(key, { symbol: item.symbol, exchange: item.exchange })
+        }
+      })
+      const symbolsArray = Array.from(uniqueSymbols.values())
+      const response = await fetch('/api/v1/multiquotes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          apikey: 'f7c106276c5424d3e7f077d08fee157acedb9d460bea00f3b53fc5e5d3799360',
+          symbols: symbolsArray,
+        }),
+      })
+      const data = await response.json()
+      if (data.status === 'success' && data.results) {
+        // Update local state with LTP
+        const updatedItems = items.map((item) => {
+          const result = data.results.find(
+            (r: any) => r.symbol === item.symbol && r.exchange === item.exchange
+          )
+          const ltp = result?.data?.ltp
+          return { ...item, ltp }
+        })
+        setItems(updatedItems)
+      }
+    } catch (_error) {
+      // Silent fail - LTP unavailable
     }
   }
 

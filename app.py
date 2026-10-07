@@ -108,6 +108,7 @@ from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
 )
 from blueprints.telegram import telegram_bp  # Import the telegram blueprint
+from blueprints.tools_docs import tools_docs_bp  # Import the Tools Documentation PDF blueprint
 from blueprints.traffic import traffic_bp  # Import the traffic blueprint
 from blueprints.tv_json import tv_json_bp
 from blueprints.vol_surface import vol_surface_bp  # Import the vol surface blueprint
@@ -115,7 +116,6 @@ from blueprints.watchlist import watchlist_bp  # Import the charting watchlist b
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 from blueprints.whatsapp import whatsapp_bp  # Import the WhatsApp blueprint
 from blueprints.wishlist import wishlist_bp  # Import the wishlist blueprint
-from blueprints.tools_docs import tools_docs_bp  # Import the Tools Documentation PDF blueprint
 from cors import init_cors
 from csp import apply_csp_middleware  # Import the CSP middleware
 from database.action_center_db import init_db as ensure_action_center_tables_exists
@@ -135,8 +135,6 @@ from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_module_db import init_db as ensure_strategy_module_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
-from database.wishlist_alert_db import init_db as ensure_wishlist_alert_tables_exists
-from database.wishlist_db import init_db as ensure_wishlist_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.user_db import init_db as ensure_user_tables_exists
@@ -144,6 +142,8 @@ from database.watchlist_db import init_db as ensure_watchlist_tables_exists
 from database.whatsapp_db import (
     get_bot_config as get_whatsapp_bot_config,  # noqa: F401  (triggers module-level init_db)
 )
+from database.wishlist_alert_db import init_db as ensure_wishlist_alert_tables_exists
+from database.wishlist_db import init_db as ensure_wishlist_tables_exists
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
 from restx_api import api, api_v1_bp
@@ -1259,4 +1259,11 @@ if __name__ == "__main__":
 
         install_signal_handlers()
 
-    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options)
+    socketio.run(
+        app,
+        host=host_ip,
+        port=port,
+        debug=debug,
+        reloader_options=reloader_options,
+        allow_unsafe_werkzeug=True,
+    )

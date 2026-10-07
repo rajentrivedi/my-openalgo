@@ -31,6 +31,8 @@ def calculate_single_margin(position_data, auth_token):
     """
     # Parse auth token
     session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
+    auth_parts = auth_token.split(":::")
+    hs_server_id = auth_parts[4] if len(auth_parts) >= 5 else ""
 
     # Debug logging for baseUrl
     logger.debug(f"MARGIN API - Using baseUrl: {base_url}")

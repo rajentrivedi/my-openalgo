@@ -26,14 +26,14 @@ def get_margin_data(auth_token):
         access_token_parts = auth_token.split(":::")
         if len(access_token_parts) < 4:
             logger.error(
-                f"Invalid auth token format. Expected 4 parts, got {len(access_token_parts)}"
+                f"Invalid auth token format. Expected at least 4 parts, got {len(access_token_parts)}"
             )
             return {}
 
-        trading_token = parts[0]
-        trading_sid = parts[1]
-        base_url = parts[2]
-        hs_server_id = parts[4] if len(parts) >= 5 else ""
+        trading_token = access_token_parts[0]
+        trading_sid = access_token_parts[1]
+        base_url = access_token_parts[2]
+        hs_server_id = access_token_parts[4] if len(access_token_parts) >= 5 else ""
 
         if not base_url:
             logger.error("Base URL not found in auth token")
