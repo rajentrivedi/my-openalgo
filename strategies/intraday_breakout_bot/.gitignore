@@ -1,5 +1,12 @@
-# Runtime artifacts created at import time by config.py
-data/
+# Runtime artifacts created at import time by config.py. The data directory is
+# tracked because it ships the universe (universe.json), the ranked candidate
+# pool (candidates.csv) and the one-off generator; only its runtime contents
+# (the journal) are ignored. `data/*` (not `data/`) is required: git cannot
+# re-include a file whose parent directory is itself excluded.
+data/*
+!data/universe.json
+!data/candidates.csv
+!data/_gen_universe.py
 __pycache__/
 .pytest_cache/
 
