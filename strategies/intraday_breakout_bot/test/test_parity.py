@@ -33,6 +33,14 @@ CSVS = (
     / "historify_nifty500"
 )
 
+#: The session mask, restated here *independently* of `planner` so the two can
+#: be compared. These must match the backtest's `load_reliance` too -- see
+#: `test_parity_mask_constants_match_backtest_source`.
+IST = "Asia/Kolkata"
+SESSION_START = 9 * 60 + 15   # 09:15, inclusive
+SESSION_END = 15 * 60 + 30    # 15:30, exclusive
+GRID = 5                      # minutes, anchored at 09:15
+
 #: (symbol, session date) pairs, chosen to cover both sides, several statuses,
 #: and sessions where the backtest legitimately produces no plan.
 #:
@@ -113,22 +121,44 @@ def test_no_plan_cases_still_have_no_plan():
         assert result is None, f"{sym} {day}: expected no plan, got {result[0]}"
 
 
-def load_full(symbol):
-    """Whole-symbol frame, built exactly as the brief specifies.
+def load_raw_csv(symbol):
+    """Bars straight from the CSV, with **no session mask applied**.
 
-    Equivalent to the backtest's own `load_reliance`, but written out here so
-    the test does not depend on the module it is testing.
+    This is the only honest input to a mask comparison. Feeding `adapt` the
+    output of `load_reliance` (already masked) cannot possibly detect a mask
+    regression -- the rows that a broken mask would wrongly keep have already
+    been removed upstream, so `adapt` sees nothing to over-include.
     """
     df = pd.read_csv(CSVS / f"{symbol}_NSE_5m.csv")
     df["timestamp"] = pd.to_datetime(df["date"] + " " + df["time"])
     df = df.set_index("timestamp").sort_index()
-    df.index = df.index.tz_localize("Asia/Kolkata")
+    df.index = df.index.tz_localize(IST)
+    # `oi` is dropped here so the frame carries exactly the OHLCV the backtest
+    # keeps; everything else is left untouched for the mask to judge.
     return df[["open", "high", "low", "close", "volume"]].astype(float)
+
+
+def load_full(symbol):
+    """The masked frame, built without going through `planner.adapt`.
+
+    Equivalent to the backtest's own `load_reliance`, but written out here so
+    the tests do not depend on the module they are testing when building the
+    *expected* side.
+    """
+    df = load_raw_csv(symbol)
+    minutes = df.index.hour * 60 + df.index.minute
+    mask = (
+        (minutes >= SESSION_START)
+        & (minutes < SESSION_END)
+        & ((minutes - SESSION_START) % GRID == 0)
+    )
+    return df[mask]
 
 
 def load_csv(symbol, day):
     """Just the requested session, for the bar-level row comparison."""
-    return load_full(symbol)[load_full(symbol).index.date == pd.Timestamp(day).date()]
+    df = load_full(symbol)
+    return df[df.index.date == pd.Timestamp(day).date()]
 
 
 def to_api_rows(df):
@@ -148,29 +178,104 @@ def to_api_rows(df):
 
 @pytest.mark.parametrize("symbol,day", SYMBOL_DAYS)
 def test_csv_rows_equal_api_rows(symbol, day):
-    """The API adapter must reproduce the backtest CSV for the same session."""
+    """The API adapter must reproduce the backtest CSV for the same session.
+
+    Compares the full frames with `assert_frame_equal`, not an
+    `index.intersection`: an intersection silently tolerates *extra* rows on
+    either side, which is precisely the shape a mask regression takes (a broken
+    mask keeps rows it should have dropped).
+    """
     csv = load_csv(symbol, day)
-    api = planner.adapt(to_api_rows(csv))
-    common = api.index.intersection(csv.index)
-    assert len(common) == len(csv) > 0
-    for col in ("open", "high", "low", "close", "volume"):
-        assert (api.loc[common, col] - csv.loc[common, col]).abs().max() == 0.0
+    api = planner.adapt(to_api_rows(load_raw_csv(symbol)))
+    api_session = api[api.index.date == pd.Timestamp(day).date()]
+
+    pd.testing.assert_frame_equal(api_session, csv)
 
 
 @pytest.mark.parametrize("symbol", SYMBOLS)
 def test_adapt_reproduces_whole_backtest_frame(symbol):
-    """`adapt` must equal the backtest's own `load_reliance` over all bars.
+    """`adapt` must equal the backtest's `load_reliance` over *all* bars.
 
-    Stronger than the per-session row check: it covers every date in the
-    export, so a shaping rule that only happens to work on one day cannot slip
-    through.
+    `adapt` is fed the **unmasked** CSV rows. The previous version of this test
+    fed it `load_reliance` output, which is already masked -- so any bar the
+    mask was supposed to drop had been removed before `adapt` saw it, and a
+    regression in the mask was undetectable by construction.
+
+    Comparing against the backtest's own `load_reliance` (not a local copy)
+    means the expected side cannot drift with our own constants.
     """
     import backtest_source
 
     expected = backtest_source.load().load_reliance(CSVS / f"{symbol}_NSE_5m.csv")
-    got = planner.adapt(to_api_rows(expected))
+    got = planner.adapt(to_api_rows(load_raw_csv(symbol)))
 
+    # Length first, with an explicit message: assert_frame_equal reports a
+    # shape mismatch abstractly, and "how many extra rows" is the whole point.
+    assert len(got) == len(expected), (
+        f"{symbol}: adapt kept {len(got)} bars, backtest kept {len(expected)} "
+        f"(difference {len(got) - len(expected)})"
+    )
     pd.testing.assert_frame_equal(got, expected)
+
+
+def test_masked_bars_exist_so_the_mask_is_actually_exercised():
+    """Fail loudly if the fixture data stops containing droppable rows.
+
+    The exports currently carry only 12 out-of-session bars per symbol, all at
+    18:00-18:55, and *zero* off-grid bars and *zero* bars at 15:30. The mask's
+    trailing edge and its grid alignment are therefore untouched by real data,
+    which is why the synthetic boundary tests in `test_planner.py` carry the
+    entire load for those two edges.
+
+    This test only guards the edge the parity data *can* cover: that droppable
+    rows exist at all. If a future export had none, the parity mask comparison
+    would be checking nothing and this would catch it.
+    """
+    raw = load_raw_csv("KAYNES")
+    minutes = raw.index.hour * 60 + raw.index.minute
+    dropped = ((minutes < SESSION_START) | (minutes >= SESSION_END)).sum()
+
+    assert dropped > 0, "fixture has no out-of-session bars; mask is untested by parity"
+
+
+def test_parity_mask_constants_match_backtest_source():
+    """Our mask constants must equal the backtest's, read from its source.
+
+    `load_reliance` inlines the mask as bare literals (555, 930, 5) with no
+    name to import, so `planner` necessarily restates them. This test pulls
+    those literals straight out of the backtest's source text and asserts our
+    three constants agree -- so an upstream change fails the gate instead of
+    silently desynchronising the two implementations.
+    """
+    import re
+
+    import backtest_source
+
+    source = pathlib.Path(backtest_source.DEFAULT_PATH).read_text()
+    start = source.index("def load_reliance")
+    body = source[start:source.index("\ndef ", start + 1)]
+
+    # The mask is one expression: (minutes >= A) & (minutes < B) & ((minutes - C) % D == 0)
+    match = re.search(
+        r"\(minutes\s*>=\s*(\d+)\)\s*&\s*\(minutes\s*<\s*(\d+)\)"
+        r"\s*&\s*\(\(minutes\s*-\s*(\d+)\)\s*%\s*(\d+)\s*==\s*0\)",
+        body,
+    )
+    assert match is not None, (
+        "could not find the session-mask expression in load_reliance; the "
+        "backtest source has been refactored and this test needs updating"
+    )
+    lower, upper, grid_start, grid_step = (int(g) for g in match.groups())
+
+    assert (planner.SESSION_START_MINUTE, planner.SESSION_END_MINUTE, planner.BAR_MINUTES) == (
+        lower,
+        upper,
+        grid_step,
+    ), (
+        f"planner mask ({planner.SESSION_START_MINUTE}, {planner.SESSION_END_MINUTE}, "
+        f"{planner.BAR_MINUTES}) disagrees with backtest ({lower}, {upper}, {grid_step})"
+    )
+    assert grid_start == lower, "backtest grid is not anchored at the session open"
 
 
 @pytest.mark.parametrize("symbol,day", SYMBOL_DAYS)

@@ -6,11 +6,20 @@ backtest's own `load_reliance` frame construction exactly: IST-localised
 timestamp index, the five OHLCV columns, numeric coercion with NaN/infinite
 rows dropped, and the 09:15-15:30 on-the-5-minute-grid mask.
 
-Two rules make that guarantee survivable:
+Three rules make that guarantee survivable:
 
-* The session/grid constants below are *derived* from the backtest module, not
-  retyped, so a change upstream cannot silently desynchronise the two.
-* Nothing in here calls the API without going through `_post`, and
+* `adapt` delegates nothing to retyped constants of its own where it can avoid
+  it -- the timezone comes from `backtest_source.IST`, so the bot and the
+  backtest can never disagree about it. The session-mask constants
+  (`SESSION_START_MINUTE`, `SESSION_END_MINUTE`, `BAR_MINUTES`) *are* retyped,
+  because the backtest inlines them in `load_reliance` with no name to import.
+  `test_parity_mask_constants_match_backtest_source` extracts the mask straight
+  out of the backtest's source text and asserts ours agrees, so a change
+  upstream fails the gate instead of silently desynchronising the two.
+* The whole per-symbol planning path -- fetching, calling `plan_for_day`, and
+  mapping its result into a `Plan` -- is wrapped so that no failure can abort a
+  whole-universe scan. Failures are recorded on `Plan.error`.
+* Nothing in here calls the API without going through `requests.post`, and
   `plan_today_from_frame` takes an already-loaded frame, so the plan maths can
   be tested against the backtest CSVs without any network access at all.
 """
@@ -86,15 +95,13 @@ class Plan:
         return self.error is None and self.side is not None and self.status != "WATCH_VOLUME"
 
 
-def _backtest_tz():
-    """The backtest module's own timezone object.
+def _backtest_tz() -> str:
+    """The backtest module's own timezone, as a string.
 
-    Not `config.TZ`, which is a `zoneinfo.ZoneInfo`. The two are the same zone
-    with the same offsets (Asia/Kolkata has no DST), so the *instants* match,
-    but the index dtype is `datetime64[ns, <tzfile>]` vs
-    `datetime64[ns, ZoneInfo]` -- different dtype objects. Since parity means
-    the planner hands `plan_for_day` a frame indistinguishable from the one the
-    backtest built, the frame index uses the backtest's tz object too.
+    `backtest_source.IST` is the plain string `'Asia/Kolkata'`, not a tzinfo
+    object. pandas accepts a string in `tz_convert`/`tz_localize` and resolves
+    it internally, which is why using it yields an index dtype identical to the
+    backtest's own `load_reliance` output.
 
     Resolved lazily (through `backtest_source`) rather than at import, so
     importing this module does not import the backtest.
@@ -172,7 +179,10 @@ def fetch_history(
         response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         body = response.json()
-    except Exception as exc:
+    except requests.RequestException as exc:
+        # Transport and HTTP-status failures only. A `TypeError` or
+        # `AttributeError` here is a bug in this function, not a bad symbol, so
+        # it propagates instead of being relabelled as an API failure.
         raise RuntimeError(f"history request failed for {symbol}: {exc}") from exc
 
     if not isinstance(body, dict) or body.get("status") != "success":
@@ -191,12 +201,19 @@ def fetch_history(
 
 
 def _parse_timestamp(value: Any) -> pd.Timestamp | None:
-    """Parse the backtest's `expires_at` (an ISO string) into a tz-aware stamp."""
+    """Parse the backtest's `expires_at` (an ISO string) into a tz-aware stamp.
+
+    Naive stamps are localised with `_backtest_tz()`, not `config.TZ`, so this
+    produces the same tz dtype the frame index uses. The backtest always emits
+    an aware ISO string, so that branch is currently unreachable -- but a second
+    tz source here would be a latent reintroduction of the very dtype
+    divergence this module exists to eliminate.
+    """
     if value is None:
         return None
     stamp = pd.Timestamp(value)
     if stamp.tzinfo is None:
-        stamp = stamp.tz_localize(config.TZ)
+        stamp = stamp.tz_localize(_backtest_tz())
     return stamp
 
 
@@ -210,30 +227,42 @@ def plan_today_from_frame(
     This is the testable seam the parity test drives. It delegates the maths to
     the backtest module itself rather than reimplementing it, which is what
     makes parity structural instead of a coincidence that needs re-checking.
+
+    Nothing in here raises. Calling `plan_for_day` *and* mapping its result into
+    a `Plan` are both inside the error handling, because the mapping is where
+    a backtest key rename or a type change surfaces as a `KeyError`/`TypeError`
+    -- and an exception escaping here would abort the caller's whole-universe
+    scan over one symbol. Such a failure is recorded on `Plan.error` instead.
     """
     try:
         result = backtest_source.plan_for_day(df, day, backtest_source.args())
+
+        if result is None:
+            return {symbol: Plan(symbol=symbol)}
+
+        side, plan, _trigger_ts = result
+        return {
+            symbol: Plan(
+                symbol=symbol,
+                side=side,
+                entry=plan["entry"],
+                stop=plan["stop"],
+                target1=plan["target1"],
+                target2=plan["target2"],
+                risk_per_share=plan["risk_per_share"],
+                stop_atr=plan["stop_atr"],
+                expires_at=_parse_timestamp(plan["expires_at"]),
+                status=plan["status"],
+            )
+        }
     except Exception as exc:
+        # Deliberately broad: the mapping touches a dict whose keys come from a
+        # module we do not control, and any failure there must degrade this one
+        # symbol rather than the scan. It is logged at warning level so a
+        # systematic failure (e.g. an upstream key rename affecting every
+        # symbol) is still loud in the log rather than silent.
+        logger.warning("planning failed for %s on %s: %s", symbol, day, exc)
         return {symbol: Plan(symbol=symbol, error=f"{type(exc).__name__}: {exc}")}
-
-    if result is None:
-        return {symbol: Plan(symbol=symbol)}
-
-    side, plan, _trigger_ts = result
-    return {
-        symbol: Plan(
-            symbol=symbol,
-            side=side,
-            entry=plan["entry"],
-            stop=plan["stop"],
-            target1=plan["target1"],
-            target2=plan["target2"],
-            risk_per_share=plan["risk_per_share"],
-            stop_atr=plan["stop_atr"],
-            expires_at=_parse_timestamp(plan["expires_at"]),
-            status=plan["status"],
-        )
-    }
 
 
 def plan_today(symbols: list[str], day: datetime.date) -> dict[str, Plan]:
@@ -241,12 +270,17 @@ def plan_today(symbols: list[str], day: datetime.date) -> dict[str, Plan]:
 
     A symbol whose history fetch fails is recorded as an errored `Plan` rather
     than raising, so one bad symbol cannot abort a whole-universe scan.
+
+    Only `RuntimeError` and `requests.RequestException` are treated as "bad
+    symbol". A `TypeError` or `AttributeError` from a signature change is a bug
+    that should be loud, so it propagates instead of being quietly mislabelled
+    `history_error` and degrading the symbol in silence.
     """
     out: dict[str, Plan] = {}
     for symbol in symbols:
         try:
             df = fetch_history(symbol, days=DEFAULT_DAYS)
-        except Exception as exc:
+        except (RuntimeError, requests.RequestException) as exc:
             logger.warning("history fetch failed for %s: %s", symbol, exc)
             out[symbol] = Plan(symbol=symbol, error=f"history_error: {exc}")
             continue
