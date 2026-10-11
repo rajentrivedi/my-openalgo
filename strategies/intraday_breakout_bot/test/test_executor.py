@@ -23,6 +23,7 @@ import executor
 import journal
 import notify
 import pytest
+import risk
 from executor import Executor, Trade
 from planner import Plan
 
@@ -72,9 +73,17 @@ class FakeApi:
         }
 
 
-class Decision:
-    def __init__(self, q):
-        self.approved, self.quantity, self.reason = True, q, None
+def Decision(q):
+    """An APPROVED decision, built from the real `risk.Decision`.
+
+    Round 1 of the review flagged that this used to be a local stand-in class
+    with three attributes set in `__init__`. A drift in the real dataclass --
+    a renamed field, a new required argument, `approved` ceasing to be the
+    first positional -- would not have failed any test here, because nothing
+    exercised the real type on the entry path. Building it from `risk.Decision`
+    means the brief's entry tests cannot pass against a stub.
+    """
+    return risk.Decision(approved=True, quantity=q, reason=None)
 
 
 @pytest.fixture(autouse=True)
@@ -393,10 +402,82 @@ def test_assert_position_rows_rejects_non_list_and_non_dict_rows():
         executor.assert_position_rows(["A"])
 
 
-def test_reconcile_also_guards_the_row_shape():
+def test_reconcile_reports_rather_than_raising_on_a_malformed_row():
+    """Round 1, Important 2: reconcile must REPORT, not abort.
+
+    A detector that raises on one bad row cannot report the faults it exists to
+    find, and OpenAlgo's `getpositions()` routinely returns zero-quantity
+    intraday rows. This test replaces the old `pytest.raises` version; the
+    entry path's strictness is pinned separately by
+    `test_entry_path_still_raises_on_a_malformed_position_row`.
+    """
+    ex = Executor(FakeApi())
+    ex.open_positions["TCS"] = Trade(
+        symbol="TCS", qty=50, state="entry_filled", stop_order_id=None, entry_price=3500.0
+    )
+    rows = [
+        {"symbol": "A", "qty": 1},  # wrong key entirely
+        "not-a-dict",
+        {"symbol": "TCS", "quantity": 50},  # the real fault, still findable
+    ]
+    # No raise, and the naked TCS position is still detected past the junk.
+    assert ex.reconcile(rows) == ["TCS"]
+
+
+def test_reconcile_detail_names_the_fault_bucket():
+    ex = Executor(FakeApi())
+    ex.open_positions["TCS"] = Trade(
+        symbol="TCS", qty=50, state="entry_filled", stop_order_id=None, entry_price=3500.0
+    )
+    rows = [
+        {"symbol": "TCS", "quantity": 50},
+        {"symbol": "INFY", "quantity": 10},
+        {"symbol": "JUNK", "qty": 5},
+    ]
+    detail = ex.reconcile_detail(rows)
+    assert detail["naked"] == ["TCS"]
+    assert detail["broker_only"] == ["INFY"]
+    assert detail["unmatched_local"] == []
+    assert detail["quantity_mismatch"] == []
+
+
+def test_reconcile_detail_handles_a_whole_broker_failure():
+    """An unusable broker response must yield every bucket empty, not raise."""
+    ex = Executor(FakeApi())
+    ex.open_positions["TCS"] = Trade(
+        symbol="TCS", qty=50, state="entry_filled", stop_order_id="O2", entry_price=3500.0
+    )
+    # A filled trade the broker cannot see is an `unmatched_local` fault, and a
+    # None broker response must produce that verdict rather than an exception.
+    assert ex.reconcile(None) == ["TCS"]
+    assert ex.reconcile_detail(None) == {
+        "naked": [],
+        "unmatched_local": ["TCS"],
+        "broker_only": [],
+        "quantity_mismatch": [],
+    }
+    assert ex.reconcile_detail([{"symbol": "TCS", "quantity": 50}]) == {
+        name: [] for name in Executor.RECONCILE_FAULTS
+    }
+
+
+def test_reconcile_detail_reports_a_missing_symbol_key():
+    ex = Executor(FakeApi())
+    assert ex.reconcile_detail([{"quantity": 5}]) == {
+        name: [] for name in Executor.RECONCILE_FAULTS
+    }
+
+
+def test_entry_path_still_raises_on_a_malformed_position_row():
+    """Carry-forward 3 is untouched: the ENTRY path stays strict.
+
+    Important 2 relaxed `reconcile` only. Before an order, a dropped row would
+    silently under-report exposure in the margin gate, so `decide` must still
+    refuse rather than absorb.
+    """
     ex = Executor(FakeApi())
     with pytest.raises(ValueError, match="quantity"):
-        ex.reconcile([{"symbol": "A", "qty": 1}])
+        ex.decide(plan(), day_pnl=0.0, fetch_positions=lambda: [{"symbol": "A", "qty": 1}])
 
 
 # --- carry-forward 4: everything routes through risk.evaluate ----------
@@ -848,3 +929,191 @@ def test_entry_order_with_zero_quantity_is_refused():
     ex = Executor(FakeApi())
     with pytest.raises(ValueError, match="quantity"):
         ex.place_entry(plan(), Decision(0))
+
+
+# --- round 1, Important 3: a resting entry order is NOT a naked position ---
+
+
+def test_working_entry_order_with_no_position_is_not_a_naked_position():
+    """A resting, unfilled entry order is the EXPECTED state, not a fault.
+
+    Round 1 flagged `reconcile` conflating this with a naked position. Sending
+    an operator to "repair" a healthy resting order -- or worse, flattening it
+    -- because it has no broker position yet is exactly the wrong response.
+    """
+    ex = Executor(FakeApi())
+    ex.open_positions["TCS"] = Trade(
+        symbol="TCS", qty=50, state="entry_pending", entry_order_id="O1", stop_order_id=None
+    )
+    assert ex.reconcile([]) == []
+    assert ex.reconcile_detail([])["naked"] == []
+    assert ex.reconcile_detail([])["unmatched_local"] == []
+
+
+def test_a_filled_trade_missing_from_the_broker_is_unmatched_local():
+    """The same shape with state=entry_filled IS a fault -- just a different one."""
+    ex = Executor(FakeApi())
+    ex.open_positions["TCS"] = Trade(
+        symbol="TCS", qty=50, state="entry_filled", entry_price=3500.0, stop_order_id="O2"
+    )
+    detail = ex.reconcile_detail([])
+    assert detail["unmatched_local"] == ["TCS"]
+    assert detail["naked"] == []
+
+
+def test_naked_and_resting_entries_are_separated_in_one_sweep():
+    ex = Executor(FakeApi())
+    ex.open_positions["RESTING"] = Trade(
+        symbol="RESTING", qty=10, state="entry_pending", entry_order_id="O1"
+    )
+    ex.open_positions["NAKED"] = Trade(
+        symbol="NAKED", qty=10, state="entry_filled", entry_price=100.0, stop_order_id=None
+    )
+    rows = [
+        {"symbol": "RESTING", "quantity": 10},
+        {"symbol": "NAKED", "quantity": 10},
+    ]
+    detail = ex.reconcile_detail(rows)
+    assert detail["naked"] == ["NAKED"]
+    assert ex.reconcile(rows) == ["NAKED"]
+
+
+def test_reconcile_detail_exposes_all_four_buckets():
+    assert tuple(Executor.RECONCILE_FAULTS) == (
+        "naked",
+        "unmatched_local",
+        "broker_only",
+        "quantity_mismatch",
+    )
+
+
+# --- round 1, Important 1: the square-off dry-run guard ---
+
+
+def test_square_off_places_no_close_order_under_dry_run(monkeypatch):
+    """Round 1 proved the 15:15 real-close path had NO dry-run guard test.
+
+    Deleting the `if config.DRY_RUN:` guard from `square_off` used to leave all
+    88 tests green, because every other dry-run assertion covered only
+    `orders`/`modified`/`cancelled`. `api.closed` was never checked and
+    `square_off` was never called in dry mode. This is that test.
+    """
+    monkeypatch.setattr(config, "DRY_RUN", True)
+    api = FakeApi()
+    ex = Executor(api)
+    trade = ex.place_entry(plan(), Decision(50))
+    ex.on_entry_filled(trade, 3500.0)
+
+    ex.square_off(trade, price=3505.0)
+
+    assert api.closed == [], "square_off called closeposition during DRY_RUN"
+    assert api.orders == []
+    assert api.modified == []
+
+
+def test_square_off_still_settles_and_journals_under_dry_run(monkeypatch):
+    """Suppressing the call must not suppress the bookkeeping."""
+    monkeypatch.setattr(config, "DRY_RUN", True)
+    ex = Executor(FakeApi())
+    trade = ex.place_entry(plan(), Decision(50))
+    ex.on_entry_filled(trade, 3500.0)
+    ex.square_off(trade, price=3505.0)
+    row = journal.read_day(_today()).iloc[-1]
+    assert row["stage"] == "squareoff"
+    assert row["reason"] == "SQUAREOFF"
+    assert trade.state == "exited"
+    assert trade.r_multiple == pytest.approx(0.25)
+    assert ex.open_positions == {}
+
+
+def test_square_off_really_closes_when_not_dry(monkeypatch):
+    """The paired assertion, so the dry-run test cannot pass by a dead guard."""
+    monkeypatch.setattr(config, "DRY_RUN", False)
+    api = FakeApi()
+    ex = Executor(api)
+    trade = ex.place_entry(plan(), Decision(50))
+    ex.on_entry_filled(trade, 3500.0)
+    ex.square_off(trade, price=3505.0)
+    assert len(api.closed) == 1
+    assert api.closed[0]["symbol"] == "TCS"
+
+
+def test_dry_run_never_reaches_a_write_api_across_the_whole_module(monkeypatch):
+    """One sweep over every state transition, checking all four write calls."""
+    monkeypatch.setattr(config, "DRY_RUN", True)
+    api = FakeApi()
+    ex = Executor(api)
+
+    trade = ex.place_entry(plan(), Decision(50))
+    ex.on_entry_filled(trade, 3500.0)
+    ex.on_t1_touched(trade)
+    ex.on_exit_filled(trade, 3520.0, "T1_TRAIL")
+
+    pending = ex.place_entry(plan(symbol="INFY", entry=100.0, stop=98.0), Decision(10))
+    pending.expires_at = dt.datetime(2020, 1, 1, 10, 0, tzinfo=executor.TZ)
+    ex.cancel_stale_entry(pending)
+
+    late = ex.place_entry(plan(symbol="SBIN", entry=900.0, stop=898.0), Decision(10))
+    ex.on_entry_filled(late, 900.0)
+    ex.square_off(late, price=901.0)
+
+    assert api.orders == []
+    assert api.modified == []
+    assert api.cancelled == []
+    assert api.closed == []
+
+
+# --- round 1, Important 4: decide()'s read APIs and what it journals ---
+
+
+def test_decide_journals_the_positions_the_gate_read():
+    """Round 1: the dry-mode reads were undocumented and unjournalled.
+
+    A margin rejection with no record of the positions behind it cannot be
+    reproduced after the fact. `note` must carry what the gate actually saw.
+    """
+    ex = Executor(FakeApi())
+    rows = [
+        {"symbol": "A", "quantity": 10, "exchange": "NSE", "product": "MIS"},
+        {"symbol": "B", "quantity": 20, "exchange": "NSE", "product": "MIS"},
+    ]
+    ex.decide(plan(symbol="TCS", status="WATCH_VOLUME"), day_pnl=0.0,
+              fetch_positions=lambda: rows)
+    note = journal.read_day(_today()).iloc[0]["note"]
+    assert "2 open position(s)" in note
+    assert "Ax10" in note and "Bx20" in note
+
+
+def test_decide_journals_an_empty_read_when_nothing_is_open():
+    ex = Executor(FakeApi())
+    ex.decide(plan(symbol="TCS", status="WATCH_VOLUME"), day_pnl=0.0,
+              fetch_positions=lambda: [])
+    assert "no open positions" in journal.read_day(_today()).iloc[0]["note"]
+
+
+def test_decide_read_apis_are_permitted_in_dry_run(monkeypatch):
+    """Round 1, Important 4: the reads are a DOCUMENTED decision, not an oversight.
+
+    `decide` cannot avoid reading positions and margin. None of those calls can
+    place, modify, cancel or close, and the margin gate is the logic most worth
+    rehearsing -- stubbing it would make a dry session systematically more
+    permissive than the real thing. What is asserted here is that the read
+    still happens, and that no *write* API is reached.
+    """
+    monkeypatch.setattr(config, "DRY_RUN", True)
+    api = FakeApi()
+    ex = Executor(api)
+
+    seen = []
+
+    def fetch():
+        seen.append("positions")
+        return []
+
+    decision = ex.decide(plan(), day_pnl=0.0, fetch_positions=fetch)
+
+    assert seen == ["positions"], "positions were not read under DRY_RUN"
+    assert api.margin_calls, "the margin gate was skipped under DRY_RUN"
+    assert decision.approved is True
+    # ...and still no write.
+    assert api.orders == [] and api.closed == [] and api.modified == []

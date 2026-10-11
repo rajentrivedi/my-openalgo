@@ -106,7 +106,18 @@ _STATES = frozenset(
 
 
 def round_tick(price: float, up: bool) -> float:
-    """Round `price` to the nearest `TICK_SIZE`, away from zero by direction.
+    """Round `price` to a `TICK_SIZE` multiple, upward or downward by `up`.
+
+    `up=True` ceils toward +infinity, `up=False` floors toward -infinity -- so
+    the result moves to the tick grid in the direction `up` names, never
+    "away from zero". Those differ for a negative price: ceiling -3500.037 is
+    -3500.0, which is *toward* zero. Say which direction you want explicitly
+    (`round_tick(stop, up=not is_long)`) rather than relying on a sign-based
+    reading; every call site in this module needs the direction to be the safe
+    one for the position, which is a function of side, not of sign.
+
+    A stop or target must round in the protective direction so it can never
+    end up *inside* the level it is meant to hold.
 
     `up=True` ceils, `up=False` floors -- the direction a stop or target must
     round so that it can never end up *inside* the level it is meant to hold.
@@ -214,6 +225,21 @@ def journal_reason(reason: Any, *, plan: Plan | None = None) -> str | None:
         return "history_error"
     logger.info("journal_reason: unmapped reason %r -> history_error", text)
     return "history_error"
+
+
+def _read_summary(rows: list[dict]) -> str:
+    """One-line summary of the position rows a risk decision was made against.
+
+    Journalled into `note` so a dry session records *what the gate actually
+    read*, not just the verdict. A margin rejection with no record of the
+    positions behind it is not reproducible after the fact.
+    """
+    if not rows:
+        return "dry-mode read: no open positions"
+    described = ",".join(
+        f"{row.get('symbol', '?')}x{row.get('quantity', '?')}" for row in rows
+    )
+    return f"dry-mode read: {len(rows)} open position(s) [{described}]"
 
 
 def assert_position_rows(rows: Any) -> list[dict]:
@@ -407,6 +433,25 @@ class Executor:
 
         `WAIT_RETEST` is turned into a rejection here rather than traded --
         see carry-forward (2).
+
+        **Read APIs are NOT suppressed by `DRY_RUN`; only writes are.**
+        Round 1 of the Task 7 review flagged that this method calls
+        `fetch_positions()` and hands `self.api` to `risk.evaluate`, which
+        calls `margin()` and possibly `funds()`, so a dry session does issue
+        API traffic. That is a deliberate decision, not an oversight:
+
+        * None of these calls can place, modify, cancel or close an order.
+          `DRY_RUN`'s purpose -- never let a rehearsal move the account -- is
+          intact, and `test_dry_run_places_no_orders_but_still_advances_state`
+          is the guard for that.
+        * The margin gate is precisely the logic worth rehearsing. Stubbing
+          the reads would make dry mode report approvals that live mode would
+          not produce, which is the dangerous direction: a rehearsal that is
+          systematically more permissive than the thing it rehearses teaches
+          the operator the wrong thing.
+        * It is journalled. The rows that were read are summarised into the
+          `note` column of the decision row, so the dry journal records what
+          the gate actually saw.
         """
         rows = assert_position_rows(fetch_positions())
 
@@ -425,14 +470,14 @@ class Executor:
             decision = risk.Decision(approved=False, quantity=0, reason="history_error")
 
         if not decision.approved:
-            note = ""
+            note = _read_summary(rows)
             if decision.reason == STATUS_WAIT_RETEST:
-                note = "entry already crossed; not chasing at a worse price"
+                note = f"{note}; entry already crossed; not chasing at a worse price"
             elif plan.error:
                 # Free text the vocabulary cannot hold. `history_error` is the
                 # bucket; the original text lives here so the operator still
                 # gets the diagnostic.
-                note = str(plan.error)[:500]
+                note = f"{note}; {str(plan.error)[:400]}"
             self._record(
                 plan.symbol,
                 plan=plan,
@@ -714,7 +759,7 @@ class Executor:
         )
         self.square_off(trade, price=fill_price)
 
-        # -- bar-driven exit resolution --------------------------------------
+    # -- bar-driven exit resolution --------------------------------------
 
     def on_bar(self, trade: Trade, high: float, low: float) -> tuple[str, float] | None:
         """Resolve one bar against a live `trade`; return `(reason, price)`.
@@ -987,52 +1032,113 @@ class Executor:
 
     # -- reconciliation -----------------------------------------------------
 
-    def reconcile(self, open_position_rows: list[dict]) -> list[str]:
-        """Compare broker positions against local state; list symbols to repair.
+    #: Fault buckets `reconcile_detail` separates. The repair for each is a
+    #: different action, which is why they are not collapsed into one list.
+    RECONCILE_FAULTS = ("naked", "unmatched_local", "broker_only", "quantity_mismatch")
 
-        Returns the sorted symbols that need attention. Two distinct faults,
-        both from review focus #2 and #3:
+    def reconcile_detail(self, open_position_rows: list[dict]) -> dict[str, list[str]]:
+        """Reconcile broker positions against local state, bucketed by fault.
 
-        * **Naked local position** -- we hold a `Trade` but the broker has no
-          protective stop order for it (`stop_order_id is None`). This is the
-          crash-between-fill-and-bracket case: the process died after the
-          entry filled, so the position is live with nothing protecting it.
-        * **Unknown broker position** -- the broker holds a symbol we have no
-          `Trade` for, or at a different quantity. Either the process restarted
-          mid-fill, or we entered without recording it. Under our accounting
-          the symbol looks unheld, so it would pass the duplicate-entry check.
+        **This reports; it never raises.** Round 1 of the Task 7 review found
+        `reconcile` was routing its input through `assert_position_rows`,
+        which raises `ValueError` on any row missing `quantity`. That is
+        correct on the *entry* path, where a dropped row silently under-reports
+        exposure before an order (see the carry-forward-3 contract), and
+        wrong here: a detector that aborts on one malformed row cannot report
+        the broker-only and local-only faults it exists to find. OpenAlgo's
+        `getpositions()` routinely returns zero-quantity intraday rows that the
+        caller must pre-filter, so raising would make this function unusable
+        on real data -- it would fail on the very rows it should be skipping
+        over to find the real problems.
 
-        A quantity mismatch on an otherwise-known symbol counts as the second
-        fault: our `qty` no longer describes reality.
+        Malformed rows are therefore *dropped* (with a warning naming the
+        symbol) rather than aborting the sweep, and the returned buckets say
+        exactly which faults were found.
 
-        Detection only -- this never places an order. Repair is the caller's
-        call, because the right repair (re-place the bracket vs. flatten) is a
-        risk decision, not a reconciliation one.
+        The four buckets are genuinely different problems:
+
+        * **`naked`** -- we hold a filled `Trade` but the broker has no
+          protective stop order for it (`stop_order_id is None`). The
+          crash-between-fill-and-bracket case: live position, nothing
+          protecting it. This is the only bucket with real market risk.
+        * **`unmatched_local`** -- we hold a `Trade` the broker does not show.
+          Almost always a *working, unfilled entry order*, which is normal and
+          is not a fault at all. Kept separate from `naked` because
+          conflating the two sends an operator to repair a healthy resting
+          order. A filled trade missing from the broker is a different matter
+          and lands here too; `entry_pending` is distinguished by state.
+        * **`broker_only`** -- the broker holds a symbol we have no `Trade` for.
+          Either we entered without recording it, or we restarted mid-fill.
+          Under our accounting the symbol looks unheld, so it would pass the
+          duplicate-entry check -- the review-focus-#3 duplicate-entry risk.
+        * **`quantity_mismatch`** -- the symbol is known on both sides but the
+          quantities disagree, so our `qty` no longer describes reality.
         """
-        rows = assert_position_rows(open_position_rows)
-        broker = {str(row.get("symbol")): row for row in rows}
-        needs_repair: set[str] = set()
+        broker: dict[str, dict] = {}
+        for index, row in enumerate(open_position_rows or []):
+            if not isinstance(row, dict):
+                logger.warning(
+                    "reconcile: ignoring position row %d (%s, not a dict)",
+                    index, type(row).__name__,
+                )
+                continue
+            symbol = row.get("symbol")
+            quantity = row.get("quantity")
+            if symbol is None or quantity is None:
+                # Not fatal. Skip it and keep looking for the faults we can
+                # actually see; raising here would blind us to those.
+                logger.warning(
+                    "reconcile: ignoring position row %d with no %s key: %r",
+                    index, "symbol" if symbol is None else "quantity", row,
+                )
+                continue
+            broker[str(symbol)] = row
+
+        faults: dict[str, set[str]] = {name: set() for name in self.RECONCILE_FAULTS}
 
         for symbol, trade in self.open_positions.items():
             row = broker.get(symbol)
             if row is None:
-                # Local state thinks we hold it; the broker does not. Either a
-                # stale local entry or a fill we never saw.
-                needs_repair.add(symbol)
+                # A resting entry order with no position is the expected state
+                # of `entry_pending`, not a naked position. Only a trade we
+                # believe is *filled* and cannot find at the broker is a fault.
+                if trade.state == "entry_pending":
+                    continue
+                faults["unmatched_local"].add(symbol)
                 continue
-            if trade.stop_order_id is None:
-                needs_repair.add(symbol)
+
+            if trade.entry_price is not None and trade.stop_order_id is None:
+                faults["naked"].add(symbol)
+
             try:
                 if int(float(row["quantity"])) != int(trade.qty):
-                    needs_repair.add(symbol)
+                    faults["quantity_mismatch"].add(symbol)
             except (TypeError, ValueError):
-                needs_repair.add(symbol)
+                faults["quantity_mismatch"].add(symbol)
 
         for symbol in broker:
             if symbol not in self.open_positions:
-                needs_repair.add(symbol)
+                faults["broker_only"].add(symbol)
 
-        return sorted(needs_repair)
+        return {name: sorted(found) for name, found in faults.items()}
+
+    def reconcile(self, open_position_rows: list[dict]) -> list[str]:
+        """Symbols needing repair: the sorted union of every fault bucket.
+
+        Kept as the flat union for the Task 7 brief's interface and for callers
+        that only need "does anything need attention?". Callers that need to
+        know *which* fault -- and therefore what repair is appropriate -- must
+        use `reconcile_detail`, because a working resting entry order and a
+        genuinely naked position both appear in this list and need opposite
+        responses.
+
+        Reports rather than raises; see `reconcile_detail` for why. Detection
+        only: this never places an order. Repair is the caller's call, because
+        re-placing the bracket vs. flattening is a risk decision, not a
+        reconciliation one.
+        """
+        detail = self.reconcile_detail(open_position_rows)
+        return sorted({symbol for names in detail.values() for symbol in names})
 
 
 __all__ = [
