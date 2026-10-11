@@ -77,6 +77,13 @@ def _is_error_response(response: Any) -> bool:
     * A dict with `status == 'error'`, or a truthy `code`, is a failure. Both
       markers are used by the SDK, and `code` is present on HTTP errors where
       `status` may be absent, so either is sufficient.
+    * A dict whose `data.failed` is a non-empty list is a failure, *even
+      though* `status == 'success'`. The broadcast endpoint reports per-recipient
+      outcomes inside a success envelope, so a partial delivery arrives as
+      `{'status': 'success', 'data': {'failed': [...]}}`. Treating that as
+      delivered is the same false-True as the error-dict case: the operator is
+      told the alert went out when part of it did not. An absent `failed` key,
+      or an empty list, is full delivery.
     * Any other dict is a success -- `{'status': 'success', ...}` is what the
       server returns, and a response shape this bot has never seen should not
       be reported as a delivery failure, which would be its own false alarm.
@@ -88,14 +95,33 @@ def _is_error_response(response: Any) -> bool:
     if isinstance(response, dict):
         if response.get("status") == "error":
             return True
-        return bool(response.get("code"))
+        if response.get("code"):
+            return True
+        return _has_failed_recipients(response)
     return False
+
+
+def _has_failed_recipients(response: dict) -> bool:
+    """True when a success envelope reports one or more failed recipients.
+
+    Looks only inside `data`, and only at a list under `failed`. Anything
+    else -- no `data`, `failed` absent, `failed: []`, or a non-list value --
+    is treated as full delivery. The leniency is deliberate: an unrecognised
+    shape should not be reported as a delivery failure, since a false alarm
+    on the alerting path is its own failure mode.
+    """
+    data = response.get("data")
+    if not isinstance(data, dict):
+        return False
+    failed = data.get("failed")
+    return isinstance(failed, list) and bool(failed)
 
 
 def send(message: str) -> bool:
     """Send `message` to the operator's WhatsApp. Returns True on success.
 
-    Returns False on an exception *and* on an error response dict -- see
+    Returns False on an exception, on an error response dict, and on a
+    *partial* delivery reported inside a success envelope -- see
     `_is_error_response` for why the second case is the common one.
 
     Never raises for an ordinary failure: a WhatsApp bridge that is unpaired,

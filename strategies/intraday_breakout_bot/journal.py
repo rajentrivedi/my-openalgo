@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import csv
 import datetime
+import io
 import logging
 import os
 import re
@@ -200,8 +201,8 @@ def write(
     row in the weekly scorer, whereas the alternative (write-temp-then-rename)
     would replace the file on every append and make a concurrent reader see a
     half-written day. The worst form of a torn file -- a zero-byte one, from an
-    interrupt between the append-open and the header-write -- is handled by
-    `_read`, which degrades it to the empty frame rather than raising.
+    interrupt between the append-open and the header-write -- is repaired on the
+    next write by `_needs_header` and tolerated on read by `_read`.
     """
     if reason and not validate_reason(reason):
         raise ValueError(
@@ -244,16 +245,80 @@ def write(
     }
 
     path = path_for(day)
-    is_new = not path.exists()
+    if _needs_header(path):
+        # Repair before opening for append. Doing it in this order means the
+        # append handle is opened against the final file contents, rather
+        # than against a file that is rewritten underneath it.
+        _prepend_header(path)
     with path.open("a", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELDS)
-        if is_new:
-            writer.writeheader()
-        writer.writerow(row)
+        csv.DictWriter(handle, fieldnames=FIELDS).writerow(row)
         # See the durability note in the docstring: a row this call returned
         # for must survive a crash, not sit in a buffer.
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _needs_header(path: Path) -> bool:
+    """True when `path` needs a header written before the next row.
+
+    The bug this replaces: `is_new = not path.exists()` treats a leftover
+    zero-byte file as an existing journal, so the next `write` skips the
+    header and appends its data row as line 1 -- which `pd.read_csv` then
+    parses *as the header*, silently reducing that day's first decision to an
+    all-NaN row. Round 1's `_read` guard stopped the loud `EmptyDataError` but
+    left the data loss intact, converting a crash into quiet corruption.
+
+    Chosen over a `st_size == 0` check because size alone only covers one of
+    the two reachable states. Once a headerless file exists, it is no longer
+    zero bytes -- it holds exactly one data row — and a size check would treat
+    that as a healthy journal forever, appending every subsequent row beneath
+    a file whose first line is not a header. Sniffing the first line recovers
+    *both*: a zero-byte file and an already-corrupted one, and leaves any
+    genuinely well-formed file untouched.
+
+    The sniff reads at most the first line rather than the whole file, so it
+    stays O(1) on a long day regardless of how many rows have accumulated.
+    """
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            first = handle.readline()
+    except FileNotFoundError:
+        return True
+
+    if not first.strip():
+        # Zero-byte or whitespace-only: `write` created the file and was
+        # interrupted before writing anything.
+        return True
+
+    # A real header starts with its first column name. Anything else means
+    # line 1 is data -- the corruption this function exists to repair.
+    return first.split(",", 1)[0].strip() != FIELDS[0]
+
+
+def _prepend_header(path: Path) -> None:
+    """Insert the `FIELDS` header above whatever the file already holds.
+
+    A no-op on a zero-byte file (nothing to preserve). On a headerless file
+    with content, the existing bytes are preserved verbatim: they are real
+    journalled decisions, and rewriting the file without them would turn a
+    recoverable layout problem into data loss.
+
+    Read fully into memory before rewriting -- a day file is at most a few
+    hundred rows, and a line-by-line rewrite cannot prepend without
+    rebuilding the file anyway.
+    """
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    if existing.strip():
+        logger.warning(
+            "journal file %s has no header (line 1 is data); prepending one "
+            "and preserving %d existing byte(s)",
+            path,
+            len(existing),
+        )
+    buffer = io.StringIO()
+    csv.DictWriter(buffer, fieldnames=FIELDS).writeheader()
+    buffer.write(existing)
+    path.write_text(buffer.getvalue(), encoding="utf-8")
 
 
 def _read(path: Path) -> pd.DataFrame:

@@ -153,3 +153,51 @@ def test_unknown_decision_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(journal, "JOURNAL_DIR", tmp_path)
     with pytest.raises(ValueError, match="decision"):
         journal.write(dt.date(2026, 10, 8), "TCS", "LONG", "plan", "Took")
+
+
+# --- crash-window header bug: a zero-byte file must not eat the next row ----
+
+def test_write_after_zero_byte_file_keeps_the_row(tmp_path, monkeypatch):
+    """Regression: a leftover zero-byte file made `write` skip the header, so
+    the data row landed on line 1 and `read_csv` parsed it AS the header.
+    The day's first real decision was silently lost."""
+    monkeypatch.setattr(journal, "JOURNAL_DIR", tmp_path)
+    (tmp_path / "2026-10-11.csv").write_text("")  # interrupt mid-`write`
+    journal.write(dt.date(2026, 10, 11), "TCS", "LONG", "plan", "taken")
+    df = journal.read_day(dt.date(2026, 10, 11))
+    assert len(df) == 1
+    assert df.iloc[0]["symbol"] == "TCS"
+    assert df.iloc[0]["decision"] == "taken"
+
+
+def test_zero_byte_file_then_two_writes_keeps_both(tmp_path, monkeypatch):
+    monkeypatch.setattr(journal, "JOURNAL_DIR", tmp_path)
+    (tmp_path / "2026-10-11.csv").write_text("")
+    journal.write(dt.date(2026, 10, 11), "TCS", "LONG", "plan", "taken")
+    journal.write(dt.date(2026, 10, 11), "INFY", "SHORT", "plan", "taken")
+    df = journal.read_day(dt.date(2026, 10, 11))
+    assert len(df) == 2
+    assert list(df["symbol"]) == ["TCS", "INFY"]
+
+
+def test_zero_byte_file_read_alone_still_empty(tmp_path, monkeypatch):
+    """Round 1's C2 fix must not regress: read alone still degrades."""
+    monkeypatch.setattr(journal, "JOURNAL_DIR", tmp_path)
+    (tmp_path / "2026-10-11.csv").write_text("")
+    df = journal.read_day(dt.date(2026, 10, 11))
+    assert list(df.columns) == journal.FIELDS
+    assert len(df) == 0
+
+
+def test_write_recovers_file_whose_first_line_is_a_data_row(tmp_path, monkeypatch):
+    """A file already in the corrupted state (data row as line 1) must not
+    lose the data that is already in it, nor the row being written now."""
+    monkeypatch.setattr(journal, "JOURNAL_DIR", tmp_path)
+    path = tmp_path / "2026-10-11.csv"
+    path.write_text(
+        "2026-10-11T09:20:53+05:30,TCS,LONG,plan,taken,,,,,,0,,,,,\n"
+    )
+    journal.write(dt.date(2026, 10, 11), "INFY", "SHORT", "plan", "taken")
+    df = journal.read_day(dt.date(2026, 10, 11))
+    assert len(df) == 2
+    assert list(df["symbol"]) == ["TCS", "INFY"]

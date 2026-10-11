@@ -107,3 +107,35 @@ def test_digest_header_counts_match_the_lines_below(tmp_path):
     msg = notify.daily_digest(plans, ["TCS", "TCS"], ["INFY"])
     assert "taken: 1" in msg and "skipped: 1" in msg
     assert msg.count("TCS") == 1
+
+
+def test_send_reports_failure_when_delivery_partially_failed(monkeypatch):
+    """`{"status": "success"}` with a non-empty `data.failed` list is a partial
+    delivery: some recipients did not get the message. Same false-True class
+    as the error-dict case."""
+    class Partial:
+        def whatsapp(self, **kw):
+            return {
+                "status": "success",
+                "message": "1 of 2 delivered",
+                "data": {"failed": [{"to": "+919999999999", "error": "not on whatsapp"}]},
+            }
+    monkeypatch.setattr(notify, "client", lambda: Partial())
+    assert notify.send("hello") is False
+
+
+def test_send_succeeds_when_delivery_fully_succeeded(monkeypatch):
+    """A `failed: []` empty list is full delivery and must stay True."""
+    class Full:
+        def whatsapp(self, **kw):
+            return {"status": "success", "data": {"failed": [], "success": ["self"]}}
+    monkeypatch.setattr(notify, "client", lambda: Full())
+    assert notify.send("hello") is True
+
+
+def test_send_succeeds_when_success_carries_no_failed_key(monkeypatch):
+    class NoData:
+        def whatsapp(self, **kw):
+            return {"status": "success", "data": {"success": ["self"]}}
+    monkeypatch.setattr(notify, "client", lambda: NoData())
+    assert notify.send("hello") is True
