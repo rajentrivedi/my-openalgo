@@ -82,6 +82,20 @@ REASONS = frozenset(
         "margin_blocked",
         # Diagnostic bucket that plan.error free text is mapped into.
         "history_error",
+        # The backtest's remaining `plan.status` tokens.
+        #
+        # `risk.evaluate` gates only `WATCH_VOLUME`; `WATCH_BREAKOUT`,
+        # `WATCH_BREAKDOWN` and `WAIT_RETEST` fall straight through and are
+        # APPROVED, so they reach the journal as the reason of a *taken*
+        # decision -- or, for `WAIT_RETEST`, of a skip (Task 7 refuses to
+        # chase a plan whose entry has already been crossed). Adding the three
+        # tokens rather than collapsing them into a catch-all is deliberate:
+        # they are the planner's own closed, stable set, so each stays its own
+        # group in Task 10's aggregation instead of disappearing into a bucket
+        # that mixes three different outcomes.
+        "WATCH_BREAKOUT",
+        "WATCH_BREAKDOWN",
+        "WAIT_RETEST",
         # Broker-side rejections.
         "order_rejected",
         # Exit reasons.

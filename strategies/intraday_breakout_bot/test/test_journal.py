@@ -3,6 +3,7 @@ import datetime as dt
 
 import journal
 import pandas as pd
+import pytest
 
 
 def test_write_creates_file_with_header(tmp_path, monkeypatch):
@@ -201,3 +202,47 @@ def test_write_recovers_file_whose_first_line_is_a_data_row(tmp_path, monkeypatc
     df = journal.read_day(dt.date(2026, 10, 11))
     assert len(df) == 2
     assert list(df["symbol"]) == ["TCS", "INFY"]
+
+
+# --- Task 7: plan-status tokens added to the reason vocabulary ----------
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["WATCH_BREAKOUT", "WATCH_BREAKDOWN", "WAIT_RETEST"],
+)
+def test_plan_status_tokens_are_writable_reasons(reason, tmp_path, monkeypatch):
+    """Task 7 added these three tokens.
+
+    `risk.evaluate` gates only `WATCH_VOLUME`, so a plan whose status is one of
+    these three is APPROVED and traded -- its status then reaches the journal as
+    the reason of a taken entry (or, for `WAIT_RETEST`, of a skip). Without the
+    tokens, `write` would raise `ValueError` on the entry loop. Each stays its
+    own token rather than collapsing into a catch-all so Task 10's groupby
+    keeps the three outcomes apart.
+    """
+    monkeypatch.setattr(journal, "JOURNAL_DIR", tmp_path)
+    assert reason in journal.REASONS
+    journal.write(
+        dt.date(2026, 10, 11), "TCS", "LONG", "order", "taken", reason=reason
+    )
+    assert journal.read_day(dt.date(2026, 10, 11)).iloc[0]["reason"] == reason
+
+
+def test_reason_vocabulary_still_rejects_free_text(tmp_path, monkeypatch):
+    """Adding tokens must not have widened the vocabulary into a free-text sink.
+
+    `risk.evaluate` returns `plan.error` verbatim; the executor normalises it to
+    `history_error` (see `executor.journal_reason`) precisely because `write`
+    stays closed here.
+    """
+    monkeypatch.setattr(journal, "JOURNAL_DIR", tmp_path)
+    with pytest.raises(ValueError, match="not in the journal vocabulary"):
+        journal.write(
+            dt.date(2026, 10, 11),
+            "TCS",
+            "LONG",
+            "risk",
+            "skipped",
+            reason="KeyError: 'entry'",
+        )
