@@ -419,3 +419,138 @@ def test_margin_is_the_only_gate_that_calls_the_api():
     assert decision.reason == "margin_blocked"
     assert api.calls == 1
 
+
+
+# --- Fix round 2 -------------------------------------------------------------
+#
+# The `available_cash` override parameter was consumed raw, bypassing the
+# `_finite_number` guard applied to the other three cash sources. A caller
+# passing `available_cash=float('nan')` got the same fail-open that was closed
+# for the internal sources one round earlier. Same class of bug, one line away
+# through the public signature, so it has to be routed through the same guard.
+
+
+class ExpensiveApi:
+    def margin(self, *, positions, **kw):
+        return {"status": "success",
+                "data": {"total_margin_required": 400000,
+                         "span_margin": 400000, "exposure_margin": 0}}
+
+
+class FallbackApi:
+    """No cash in the margin response, but `funds()` can answer 100,000."""
+
+    def funds(self):
+        return {"status": "success", "data": {"availablecash": 100000.0}}
+
+    def margin(self, *, positions, **kw):
+        return {"status": "success", "data": {"total_margin_required": 400000}}
+
+
+class FallbackAffordableApi(FallbackApi):
+    """Same cash source, but a requirement the fallback cash actually covers."""
+
+    def margin(self, *, positions, **kw):
+        return {"status": "success", "data": {"total_margin_required": 25012}}
+
+
+def test_nan_cash_override_blocks():
+    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [],
+                                   ExpensiveApi(), available_cash=float("nan"))
+    assert ok is False
+    assert "cash" in detail.lower()
+
+
+def test_infinite_cash_override_blocks():
+    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [],
+                                   ExpensiveApi(), available_cash=float("inf"))
+    assert ok is False
+    assert "cash" in detail.lower()
+
+
+def test_negative_cash_override_is_unusable_not_merely_blocking():
+    """A negative balance is not a cash figure, so it falls through.
+
+    Discriminating: `FallbackAffordableApi` could approve on 100,000 cash, and
+    the override of -1.0 would have blocked via comparison. Approving proves
+    the override was discarded as unusable rather than merely compared.
+    """
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FallbackAffordableApi(),
+                              available_cash=-1.0)
+    assert ok is True
+
+
+def test_bool_cash_override_is_not_a_cash_figure():
+    """`isinstance(True, int)` is True, so a bool must be rejected explicitly."""
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FallbackAffordableApi(),
+                              available_cash=True)
+    assert ok is True
+
+
+def test_nan_override_falls_back_and_uses_broker_cash():
+    """An unusable override must not block when the broker can still answer.
+
+    Discriminating: `FallbackApi` needs 400,000 against 100,000 available, so
+    blocking proves the NaN override was discarded and the broker figure
+    actually consulted. With the raw override, `required > nan` is False and
+    this would have approved.
+    """
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FallbackApi(),
+                              available_cash=float("nan"))
+    assert ok is False
+
+
+def test_nan_override_falls_back_successfully_rather_than_blocking():
+    """...and when the fallback cash does cover it, the trade still proceeds."""
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FallbackAffordableApi(),
+                              available_cash=float("nan"))
+    assert ok is True
+
+
+def test_finite_cash_override_still_short_circuits():
+    """The override's whole purpose: it must win and skip the round trip."""
+    class NoFundsAllowed:
+        def funds(self):
+            raise AssertionError("override should have short-circuited funds()")
+
+        def margin(self, *, positions, **kw):
+            return {"status": "success",
+                    "data": {"total_margin_required": 25012, "availablecash": 1.0}}
+
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], NoFundsAllowed(),
+                              available_cash=1e9)
+    assert ok is True
+
+
+def test_zero_cash_override_blocks_even_though_fallback_could_approve():
+    """0.0 is finite and is a real figure -- it must win, not be discarded.
+
+    Discriminating: `fallback` could answer 100,000 and approve, so blocking
+    proves the explicit zero was actually used.
+    """
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FallbackApi(),
+                              available_cash=0.0)
+    assert ok is False
+
+
+def test_evaluate_is_unaffected_by_the_override():
+    """`evaluate` never passes the override; this pins that it stays that way."""
+    d = risk.evaluate(plan(), 0, 0.0, [], ExpensiveApi())
+    assert d.approved is False
+    assert d.reason == "margin_blocked"
+
+
+def test_proposed_position_without_quantity_is_rejected():
+    """A proposed row with no quantity cannot be sent as a real position."""
+    ok, detail = risk.check_margin({"symbol": "RELIANCE"}, [], CountingApi())
+    assert ok is False
+    assert "quantity" in detail.lower()
+
+
+def test_proposed_explicit_zero_quantity_is_still_sent():
+    """0 is an explicit, meaningful quantity -- distinct from absent."""
+    api = CountingApi()
+    ok, _ = risk.check_margin({"symbol": "RELIANCE", "quantity": 0}, [], api)
+    assert ok is True
+    assert api.seen[0]["quantity"] == "0"
+

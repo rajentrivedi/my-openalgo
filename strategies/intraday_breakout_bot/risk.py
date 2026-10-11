@@ -102,6 +102,26 @@ def _finite_number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _cash_figure(value: Any) -> float | None:
+    """Coerce `value` to a usable *available cash* float, or None if it is not.
+
+    Stricter than `_finite_number` on one axis: a negative balance is a
+    perfectly finite number but is not spendable cash, so it is treated as an
+    unusable figure rather than as a cash balance of -1.00. Zero, by contrast,
+    is a real and meaningful figure (an account with nothing free) and is
+    returned as-is -- it must be compared against, not discarded, so that a
+    fully-deployed account correctly blocks.
+
+    This is the single entry point for every cash figure in the module, from
+    all four sources: the `availablecash` in the margin response, `funds()`,
+    the client's `cash` attribute, and the `available_cash` override.
+    """
+    number = _finite_number(value)
+    if number is None or number < 0:
+        return None
+    return number
+
+
 def risk_amount() -> float:
     """Rupees at risk per trade: `BUDGET * RISK_PCT / 100` (1000.0)."""
     return config.BUDGET * config.RISK_PCT / 100.0
@@ -156,11 +176,21 @@ def _payload_positions(
     fabricated `"0"` row would be sent to the broker as a real position and
     inflate the broker-side position count, corrupting the very margin figure
     this gate exists to read. A position we cannot describe is a position we
-    cannot account for, so the safe move is to leave it out and let the
-    drop show up in the log.
+    cannot account for, so the safe move is to leave it out and let the drop
+    show up in the log.
 
-    The proposed position is the exception: it is always sent, because
-    declining to send it would silently skip the margin check entirely.
+    The **proposed** position is treated differently, and deliberately so.
+    Dropping it would send an empty or zero-length list and make the broker
+    return a requirement for *nothing* -- skipping the margin check rather
+    than failing it, which is the exact fail-open this module forbids.
+    Defaulting it to `"0"` is no better: it registers a real, zero-quantity
+    position at the broker and understates the requirement. So a proposed
+    position with no `quantity` raises `ValueError` and the gate fails closed
+    without making an API call at all. The trade this could affect is already
+    unrepresentable at the broker, so there is nothing worth asking.
+
+    An explicit `quantity` of `0` is *not* absent: it is a real, meaningful
+    value that is passed through as `"0"`.
     """
     rows = []
     for position, is_proposed in [(proposed, True), *((p, False) for p in open_positions)]:
@@ -169,14 +199,15 @@ def _payload_positions(
 
         if quantity is None:
             if is_proposed:
-                row["quantity"] = "0"
-            else:
-                logger.warning(
-                    "dropping open position with no quantity from the margin "
-                    "payload: %r",
-                    position,
+                raise ValueError(
+                    f"proposed position has no 'quantity' key: {position!r}"
                 )
-                continue
+            logger.warning(
+                "dropping open position with no quantity from the margin "
+                "payload: %r",
+                position,
+            )
+            continue
 
         row["quantity"] = str(quantity)
         row["pricetype"] = "MARKET"
@@ -195,16 +226,16 @@ def _available_cash(data: dict[str, Any], api_client: Any) -> float | None:
     3. A `cash` attribute on the client -- lets a caller (or a test double)
        supply a known figure without an extra call.
 
-    Every value passes through `_finite_number`, so a bool, a string, NaN or
-    infinity is treated as absent rather than as a cash figure. NaN is the
-    dangerous one: `required > nan` is False, so accepting it would make this
-    function approve a trade it should block.
+    Every value passes through `_cash_figure`, so a bool, a string, NaN,
+    infinity or a negative balance is treated as absent rather than as a cash
+    figure. NaN is the dangerous one: `required > nan` is False, so accepting
+    it would make this function approve a trade it should block.
 
     Returns None when none of those produce a usable number. The caller treats
     that as "cannot verify", and therefore blocks.
     """
     if isinstance(data, dict):
-        direct = _finite_number(data.get("availablecash"))
+        direct = _cash_figure(data.get("availablecash"))
         if direct is not None:
             return direct
 
@@ -218,11 +249,11 @@ def _available_cash(data: dict[str, Any], api_client: Any) -> float | None:
         if isinstance(response, dict):
             payload = response.get("data")
             if isinstance(payload, dict):
-                available = _finite_number(payload.get("availablecash"))
+                available = _cash_figure(payload.get("availablecash"))
                 if available is not None:
                     return available
 
-    return _finite_number(getattr(api_client, "cash", None))
+    return _cash_figure(getattr(api_client, "cash", None))
 
 
 def check_margin(
@@ -246,8 +277,21 @@ def check_margin(
     trade against an arbitrary margin requirement. Every such block logs at
     `error` level naming the reason, so an operator sees *why* the gate fired
     rather than finding a mysteriously untraded day.
+
+    `available_cash` is a caller-supplied short circuit for when the caller
+    already knows the cash figure. It is validated by the same `_cash_figure`
+    guard as the broker-derived sources; a non-finite or otherwise unusable
+    override is logged and discarded in favour of the normal sources, rather
+    than being trusted. It must never be a way to smuggle an unchecked figure
+    past the gate.
     """
-    positions = _payload_positions(proposed, open_positions)
+    try:
+        positions = _payload_positions(proposed, open_positions)
+    except ValueError as exc:
+        # An unrepresentable proposed position. Fail closed without an API
+        # call: there is no requirement for the broker to compute.
+        logger.error("margin gate BLOCKING: %s", exc)
+        return False, f"margin call failed: {exc}"
 
     try:
         response = api_client.margin(positions=positions, pricetype="MARKET")
@@ -276,7 +320,21 @@ def check_margin(
         )
         return False, f"margin call failed: negative total_margin_required {required}"
 
-    cash = available_cash if available_cash is not None else _available_cash(data, api_client)
+    # The override goes through `_cash_figure` exactly like the three
+    # broker-derived sources. Consuming it raw was the same fail-open the
+    # guard exists to prevent, reachable through this module's own public
+    # signature: `available_cash=float('nan')` skips the None check, then
+    # `required > nan` is False, and the gate approves. A future caller
+    # passing one bad value would have silently disabled the safety gate.
+    cash = _cash_figure(available_cash)
+    if cash is None:
+        if available_cash is not None:
+            logger.warning(
+                "available_cash override %r is not a usable cash figure; "
+                "discarding it and falling back to the broker-derived sources",
+                available_cash,
+            )
+        cash = _available_cash(data, api_client)
 
     if cash is None:
         logger.error(
@@ -330,6 +388,18 @@ def evaluate(
     agree with `open_positions` at the same instant. Read fresh state
     immediately before each entry; a one-trade-late margin check is exactly
     the failure this gate exists to prevent.
+
+    The rows must also use the **key shape this module expects**: a
+    `quantity` key per position (plus whatever `symbol`/`exchange` the broker
+    returned). A position missing `quantity` is dropped from the margin
+    payload with a warning, so a wholesale key mismatch -- passing `qty`,
+    say, or a reshaped broker dict -- would silently under-report real
+    exposure and the gate would compare a requirement that excludes positions
+    you actually hold. **A shape mismatch is the caller's error, not this
+    module's to absorb.** Task 7 should assert that the positions list is
+    well-formed and non-empty whenever positions are genuinely open; that
+    check belongs at the Task 7 boundary, and this contract exists so it can
+    be written as an acceptance criterion there.
 
     **Caller contract for `Decision.reason` (Task 7):** every gate returns one
     of the fixed vocabulary values *except* the `error` gate, which passes
