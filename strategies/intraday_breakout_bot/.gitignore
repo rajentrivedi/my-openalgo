@@ -5,5 +5,12 @@ __pycache__/
 
 # Our package ships its tests; the parent strategies/.gitignore excludes test/
 # dirs used for runtime config copies. Un-ignore ours.
+#
+# `**` rather than `*.py`: git cannot re-include a file if a parent *directory*
+# is excluded, so a nested helper (e.g. test/helpers/fakes.py) would still be
+# dropped by a single-level pattern.
 !test/
-!test/*.py
+!test/**
+# Later patterns win over the negation above, so re-exclude build artifacts.
+test/**/__pycache__/
+test/**/*.pyc

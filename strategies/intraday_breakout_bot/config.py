@@ -41,8 +41,10 @@ DATA_DIR = PACKAGE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 UNIVERSE_PATH = DATA_DIR / "universe.json"
+# JOURNAL_DIR is created lazily by the journal module (Task N) on first write.
+# Importing config must not create directories beyond the spec-mandated
+# DATA_DIR; it only guarantees JOURNAL_DIR's parent exists.
 JOURNAL_DIR = DATA_DIR / "journal"
-JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Timezone ---------------------------------------------------------------
 
@@ -58,17 +60,41 @@ if not API_KEY:
     )
 
 
-def assert_paper_only() -> None:
-    """Fail loudly unless the connected account is in `analyze` (paper) mode.
+def _default_sdk_factory(api_key: str, host: str):
+    """Build a real openalgo client.
 
-    The openalgo SDK is imported lazily so that `import config` never needs the
-    SDK installed and never performs network I/O.
+    Imported lazily so that `import config` never requires the SDK and never
+    performs network I/O. Tests replace `config._sdk_factory` instead of
+    monkeypatching the openalgo package itself.
     """
     from openalgo import api as openalgo_api
 
-    client = openalgo_api(api_key=API_KEY, host=API_HOST)
+    return openalgo_api(api_key=api_key, host=host)
+
+
+#: Injection seam for `assert_paper_only`. Defaults to the real SDK client.
+_sdk_factory = _default_sdk_factory
+
+
+def assert_paper_only() -> None:
+    """Fail loudly unless the connected account is in `analyze` (paper) mode.
+
+    Fails closed: anything other than a well-formed response whose `mode` is
+    exactly `"analyze"` raises `RuntimeError`. This is the last guard before
+    the bot is allowed to act, so an unexpected response shape must never be
+    treated as "probably fine".
+    """
+    client = _sdk_factory(API_KEY, API_HOST)
     response = client.funds()
-    mode = (response or {}).get("mode")
+
+    if not isinstance(response, dict):
+        raise RuntimeError(
+            "Unexpected response from OpenAlgo funds(): expected a dict, got "
+            f"{type(response).__name__}. Cannot confirm paper-trading mode; "
+            "refusing to continue."
+        )
+
+    mode = response.get("mode")
     if mode != "analyze":
         raise RuntimeError(
             f"Account mode is {mode!r}, expected 'analyze' (paper trading). "
@@ -78,7 +104,6 @@ def assert_paper_only() -> None:
 
 __all__ = [
     "API_HOST",
-    "API_KEY",
     "BUDGET",
     "DAILY_LOSS_LIMIT",
     "DATA_DIR",
