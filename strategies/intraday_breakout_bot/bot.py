@@ -276,7 +276,7 @@ class Bot:
         list is the safe reading (the margin gate still fails closed on an
         unknown cash figure downstream).
         """
-        response = self.api.openposition()
+        response = self.api.positionbook()
         if isinstance(response, dict) and response.get("status") == "success":
             data = response.get("data")
             if isinstance(data, list):

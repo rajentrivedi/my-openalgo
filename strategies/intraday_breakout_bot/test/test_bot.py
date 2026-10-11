@@ -65,7 +65,7 @@ def plan(**kw):
 class FakeApi:
     """A broker double that records writes and answers the reads the bot makes.
 
-    `positions` seeds what `openposition()` reports, so reconciliation and the
+    `positions` seeds what `positionbook()` reports, so reconciliation and the
     risk gate's position read can be driven per-test. `margin()` approves by
     default (requirement well under cash); individual tests do not need to
     touch it.
@@ -75,7 +75,7 @@ class FakeApi:
         self._positions = positions or []
         self.orders, self.modified, self.cancelled, self.closed = [], [], [], []
 
-    def openposition(self):
+    def positionbook(self):
         return {"status": "success", "data": list(self._positions)}
 
     def placesmartorder(self, **kw):
