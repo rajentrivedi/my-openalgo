@@ -101,3 +101,107 @@ def test_evaluate_approves_good_trade():
     assert d.approved is True
     assert d.quantity == 50
     assert d.reason is None
+
+
+# --- Ruling: the margin gate fails closed on undeterminable cash -------------
+#
+# `check_margin` is the only mechanism bounding capital deployed beyond the
+# budget, so an unknown available-cash figure must block rather than pass. An
+# API response-shape change, a transient `funds()` failure, or a missing key
+# must not silently turn the safety gate into a no-op.
+
+
+class NoCashApi:
+    """Margin succeeds, but nothing anywhere reports available cash."""
+
+    def margin(self, *, positions, **kw):
+        return {"status": "success",
+                "data": {"total_margin_required": 25012,
+                         "span_margin": 25012, "exposure_margin": 0}}
+
+
+def test_margin_blocks_when_cash_undeterminable():
+    ok, detail = risk.check_margin({"symbol": "RELIANCE", "quantity": 100}, [], NoCashApi())
+    assert ok is False
+    assert "cash" in detail.lower()
+
+
+def test_margin_blocks_when_cash_undeterminable_even_if_cheap():
+    """A trivially affordable-looking figure is still unverifiable -> block."""
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 1}, [], NoCashApi())
+    assert ok is False
+
+
+def test_evaluate_blocks_with_margin_blocked_when_cash_unknown():
+    d = risk.evaluate(plan(), 0, 0.0, [], NoCashApi())
+    assert d.approved is False
+    assert d.reason == "margin_blocked"
+    assert d.quantity == 0
+
+
+def test_funds_failure_does_not_block_a_known_cash_figure():
+    """A funds() that raises must not matter when cash is supplied explicitly."""
+
+    class FundsBoom:
+        def funds(self):
+            raise RuntimeError("funds endpoint down")
+
+        def margin(self, *, positions, **kw):
+            return {"status": "success",
+                    "data": {"total_margin_required": 25012,
+                             "span_margin": 25012, "exposure_margin": 0}}
+
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FundsBoom(),
+                              available_cash=100000.0)
+    assert ok is True
+
+
+def test_availablecash_in_margin_response_is_used():
+    class DataCashApi:
+        def margin(self, *, positions, **kw):
+            return {"status": "success",
+                    "data": {"total_margin_required": 400000, "availablecash": 100000.0}}
+
+        def funds(self):
+            raise AssertionError("must not need a second round trip")
+
+    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [], DataCashApi())
+    assert ok is False
+    assert "margin" in detail.lower()
+
+
+def test_cash_derivable_from_funds_still_approves():
+    class FundsApi:
+        def funds(self):
+            return {"status": "success", "data": {"availablecash": 100000.0}}
+
+        def margin(self, *, positions, **kw):
+            return {"status": "success",
+                    "data": {"total_margin_required": 25012,
+                             "span_margin": 25012, "exposure_margin": 0}}
+
+    d = risk.evaluate(plan(), 0, 0.0, [], FundsApi())
+    assert d.approved is True
+    assert d.quantity == 50
+    assert d.reason is None
+
+
+def test_margin_api_error_still_blocks():
+    class BoomApi:
+        def margin(self, *, positions, **kw):
+            raise RuntimeError("broker down")
+
+    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [], BoomApi())
+    assert ok is False
+    assert "margin" in detail.lower()
+
+
+def test_margin_bad_status_still_blocks():
+    class BadStatusApi:
+        def margin(self, *, positions, **kw):
+            return {"status": "error", "message": "nope"}
+
+    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [], BadStatusApi())
+    assert ok is False
+    assert "margin" in detail.lower()
+

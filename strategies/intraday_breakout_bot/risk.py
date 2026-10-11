@@ -17,7 +17,9 @@ The sizing rule is deliberately blunt: risk a fixed rupee amount per trade
   everything already open, checked against available cash. A probe returned
   ~25% of notional for a MIS intraday position, so four concurrent positions
   roughly consume the whole ₹1L budget -- this is the gate that makes the
-  concurrency cap an economic constraint rather than an arbitrary one.
+  concurrency cap an economic constraint rather than an arbitrary one. It
+  fails **closed**: if available cash cannot be determined, the trade is
+  blocked.
 
 Two properties are load-bearing and easy to regress:
 
@@ -178,11 +180,17 @@ def check_margin(
     """Ask the broker whether the proposed position fits in available cash.
 
     Returns `(ok, detail)`. `ok` is False when the margin call fails, returns a
-    non-success status, or when the required margin exceeds the cash we can
-    establish. When cash cannot be established at all the check passes -- it
-    has no evidence of a problem, and the sizing, ATR, daily-loss and
-    concurrency gates have already bounded the exposure. That is logged at
-    warning level so an unavailable cash figure is never silent.
+    non-success status, when the required margin exceeds the cash we can
+    establish, **or when available cash cannot be established at all**.
+
+    That last case is deliberate and is the gate's governing rule: this check
+    is the only mechanism bounding how much capital the bot can deploy beyond
+    the budget, so an unknown cash figure must block rather than pass. A
+    broker response-shape change, a transient `funds()` failure, or a missing
+    key must not silently convert the safety gate into a no-op that approves a
+    trade against an arbitrary margin requirement. Every such block logs at
+    `error` level naming the reason, so an operator sees *why* the gate fired
+    rather than finding a mysteriously untraded day.
     """
     positions = _payload_positions(proposed, open_positions)
 
@@ -207,12 +215,18 @@ def check_margin(
     cash = available_cash if available_cash is not None else _available_cash(data, api_client)
 
     if cash is None:
-        logger.warning(
-            "margin required %.2f but available cash could not be determined; "
-            "allowing the trade to pass the margin gate",
+        logger.error(
+            "margin gate BLOCKING: %.2f margin required but available cash could "
+            "not be determined from the margin response, funds(), or the client. "
+            "Failing closed -- an unknown cash figure must never approve a trade, "
+            "because this gate is the only bound on capital deployed beyond the "
+            "budget. Check the OpenAlgo/funds response shape and API key.",
             required,
         )
-        return True, f"margin ok: {required:.2f} required, cash unknown"
+        return False, (
+            f"margin blocked: available cash could not be determined to cover "
+            f"{required:.2f} required"
+        )
 
     if required > cash:
         return False, (
@@ -242,8 +256,28 @@ def evaluate(
     API round trip runs last, so a doomed plan never spends one. The first
     failing gate is the one reported, which keeps the rejection reason
     actionable rather than a list.
+
+    **Caller contract for `open_positions` (Task 7):** this argument must be
+    the *current* broker positions, fetched at call time. Do not capture a
+    list once at loop start and reuse it across entries -- `check_margin`
+    sums the proposed position against everything in this list, so a stale
+    snapshot approves the day's fourth entry against stale broker state and
+    the cumulative margin bound silently drifts. Likewise `open_count` must
+    agree with `open_positions` at the same instant. Read fresh state
+    immediately before each entry; a one-trade-late margin check is exactly
+    the failure this gate exists to prevent.
+
+    **Caller contract for `Decision.reason` (Task 7):** every gate returns one
+    of the fixed vocabulary values *except* the `error` gate, which passes
+    `plan.error` through verbatim -- it is an operator-facing diagnostic
+    string (`"history_error: ..."`, `"KeyError: 'entry'"`) rather than a
+    token, and no test pins it. Journal validation must map or normalise it
+    before writing; treat it as untrusted free text, not as a reason code.
     """
     if plan.error is not None:
+        # Reason is `plan.error` verbatim, deliberately outside the fixed
+        # vocabulary: this is a diagnostic, not a code. See the caller contract
+        # in `evaluate`'s docstring -- Task 7 must map it before journalling.
         return Decision(approved=False, quantity=0, reason=plan.error)
 
     if plan.status == REASON_WATCH_VOLUME:
