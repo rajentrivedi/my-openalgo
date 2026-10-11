@@ -100,13 +100,21 @@ def test_session_mask_boundaries(hhmm, expected_kept):
 
 
 def test_adapt_keeps_only_grid_aligned_minutes():
-    """Every survivor sits on the 09:15-anchored 5-minute grid."""
+    """Every survivor sits on the 09:15-anchored 5-minute grid.
+
+    Anchored to a literal expectation, not to `planner.BAR_MINUTES`. The
+    previous version computed `... % planner.BAR_MINUTES == 0`, i.e. it used
+    the constant under test as its own oracle and therefore passed for any
+    grid spacing at all -- including the `BAR_MINUTES = 1` mutation. The
+    expected survivors below are derived by hand from the literal mask
+    (09:15 + n*5, before 15:30).
+    """
     raw = [bar(f"{h:02d}:{m:02d}") for h in (9, 10, 14) for m in range(0, 60, 7)]
 
-    minutes = planner.adapt(raw).index.hour * 60 + planner.adapt(raw).index.minute
+    df = planner.adapt(raw)
+    got = [f"{t.hour:02d}:{t.minute:02d}" for t in df.index]
 
-    assert len(minutes) > 0
-    assert ((minutes - planner.SESSION_START_MINUTE) % planner.BAR_MINUTES == 0).all()
+    assert got == ["09:35", "10:00", "10:35", "14:00", "14:35"]
 
 
 def test_adapt_empty_input_returns_empty_ist_frame():

@@ -246,12 +246,17 @@ def test_parity_mask_constants_match_backtest_source():
     those literals straight out of the backtest's source text and asserts our
     three constants agree -- so an upstream change fails the gate instead of
     silently desynchronising the two implementations.
+
+    The file read is `backtest_source._resolve_path()`, i.e. the module's own
+    resolver, which honours `INTRADAY_BACKTEST_PATH`. Reading `DEFAULT_PATH`
+    directly would parse the default file even when an override is in effect --
+    passing silently while checking a source that was never imported.
     """
     import re
 
     import backtest_source
 
-    source = pathlib.Path(backtest_source.DEFAULT_PATH).read_text()
+    source = pathlib.Path(backtest_source._resolve_path()).read_text()
     start = source.index("def load_reliance")
     body = source[start:source.index("\ndef ", start + 1)]
 
@@ -341,3 +346,86 @@ def test_plan_from_api_shaped_bars_matches_backtest(symbol, day):
     assert got.target1 == pytest.approx(expected["target1"])
     assert got.target2 == pytest.approx(expected["target2"])
     assert got.status == expected["status"]
+
+
+def _mask_checker_against(monkeypatch, tmp_path, mask_expr):
+    """Write a stub backtest module with `mask_expr` and point the loader at it.
+
+    The stub needs the mask expression in a `load_reliance` body plus the
+    attributes `test_parity_mask_constants_match_backtest_source` reads. It is
+    never imported -- the check parses it as text.
+    """
+    stub = tmp_path / "override_backtest.py"
+    stub.write_text(
+        "IST = 'Asia/Kolkata'\n"
+        "\n"
+        "def load_reliance(path):\n"
+        "    minutes = 0\n"
+        f"    df = df[{mask_expr}]\n"
+        "    return df\n"
+        "\n"
+        "# Trailing def: the checker slices from `def load_reliance` to the next\n"
+        "# top-level `def`, so one has to follow.\n"
+        "def marker():\n"
+        "    return None\n"
+    )
+    monkeypatch.setenv("INTRADAY_BACKTEST_PATH", str(stub))
+    return stub
+
+
+def test_mask_check_reads_the_overridden_path_not_the_default(monkeypatch, tmp_path):
+    """A mask change in an *overridden* backtest must be caught.
+
+    Reading `DEFAULT_PATH` instead of the resolver would parse the default
+    file (which still says 555/930/5) and pass silently, even though the
+    module actually in use says something else.
+    """
+    import importlib
+
+    import backtest_source
+
+    _mask_checker_against(
+        monkeypatch, tmp_path,
+        "(minutes >= 555) & (minutes < 930) & ((minutes - 555) % 5 == 0)",
+    )
+    try:
+        # Sanity: the override really is what the resolver hands back.
+        assert backtest_source._resolve_path() == (
+            tmp_path / "override_backtest.py"
+        ).resolve()
+        importlib.reload(backtest_source)
+        test_parity_mask_constants_match_backtest_source()
+    finally:
+        monkeypatch.delenv("INTRADAY_BACKTEST_PATH")
+        importlib.reload(backtest_source)
+
+
+@pytest.mark.parametrize(
+    "mask_expr",
+    [
+        pytest.param(
+            "(minutes >= 555) & (minutes < 935) & ((minutes - 555) % 5 == 0)",
+            id="later-session-end",
+        ),
+        pytest.param(
+            "(minutes >= 555) & (minutes < 930) & ((minutes - 555) % 15 == 0)",
+            id="coarser-grid",
+        ),
+    ],
+)
+def test_mask_check_catches_a_mask_change_in_the_overridden_path(
+    monkeypatch, tmp_path, mask_expr
+):
+    """Same, but the override disagrees with `planner` -- this must fail."""
+    import importlib
+
+    import backtest_source
+
+    _mask_checker_against(monkeypatch, tmp_path, mask_expr)
+    try:
+        importlib.reload(backtest_source)
+        with pytest.raises(AssertionError, match="disagrees with backtest"):
+            test_parity_mask_constants_match_backtest_source()
+    finally:
+        monkeypatch.delenv("INTRADAY_BACKTEST_PATH")
+        importlib.reload(backtest_source)
