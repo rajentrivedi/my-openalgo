@@ -1,0 +1,21 @@
+# Schedule for the weekly universe refresh.
+#
+# Runs every Sunday at 18:00 (server local time) — after the trading week, well
+# clear of market hours. `Persistent=true` makes systemd run a missed refresh on
+# the next boot if the machine was off at the scheduled time, so a weekend
+# shutdown does not silently skip a week's re-screen.
+#
+# NOTE: OnCalendar uses the server's local timezone. If this host is not on IST,
+# either set the host timezone or adjust the time here; the refresh time is not
+# market-critical (it only needs to land after Friday's close and before Monday
+# pre-open), so an hour either way is harmless.
+[Unit]
+Description=Weekly trigger for the intraday breakout universe refresh
+
+[Timer]
+OnCalendar=Sun 18:00
+Persistent=true
+Unit=intraday-breakout-universe.service
+
+[Install]
+WantedBy=timers.target

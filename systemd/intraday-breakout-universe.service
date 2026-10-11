@@ -1,0 +1,30 @@
+# OpenAlgo intraday breakout bot — weekly universe refresh (oneshot).
+#
+# Triggered by intraday-breakout-universe.timer; not meant to be enabled on its
+# own. Re-screens the universe against the latest backtest metrics, drops names
+# that no longer clear the thresholds, promotes the highest-ranked passing
+# candidates back up to the target size, rewrites universe.json + a dated
+# changes_*.csv audit trail, and sends one WhatsApp summary.
+#
+# Install (as root):
+#   cp systemd/intraday-breakout-universe.service /etc/systemd/system/
+#   cp systemd/intraday-breakout-universe.timer   /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now intraday-breakout-universe.timer
+#
+# Type=oneshot: the job runs to completion and exits. The WhatsApp summary only
+# fires when the account is out of dry-run (OPENALGO_DRY_RUN=0 in the .env);
+# under dry-run it is logged instead, so this unit is safe to leave scheduled
+# while the bot is still being validated on paper.
+[Unit]
+Description=OpenAlgo Intraday Breakout Bot - Weekly Universe Refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pcadmin
+Group=pcadmin
+WorkingDirectory=/home/pcadmin/Documents/nse/openalgo/strategies/intraday_breakout_bot
+EnvironmentFile=/home/pcadmin/Documents/nse/openalgo/strategies/intraday_breakout_bot/.env
+ExecStart=/usr/bin/python3 -m universe_weekly

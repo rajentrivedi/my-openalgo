@@ -331,3 +331,16 @@ def main() -> int:
 
 
 __all__ = ["PLAN_WINDOW_END", "POLL_SECONDS", "STAGES", "Bot", "main"]
+
+
+if __name__ == "__main__":  # pragma: no cover - process entry point
+    # The systemd unit's ExecStart is `python3 -m bot`, which runs this module
+    # as `__main__`. Without this guard the module would import and exit 0
+    # without ever starting a session. Logging is configured here (not in
+    # `main`, which stays side-effect-free for the tests) so operator-facing
+    # output lands in journald via stdout/stderr.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    raise SystemExit(main())

@@ -187,7 +187,7 @@ def _send_summary(kept: list[str], dropped: list[str], promoted: list[str]) -> b
         return False
 
 
-def run(target_size: int = 64) -> dict:
+def run(target_size: int = 64, *, persist: bool = True) -> dict:
     """Re-screen the universe, refill to ``target_size``, persist and notify.
 
     Returns ``{"kept": [...], "dropped": [...], "promoted": [...]}``.
@@ -203,6 +203,13 @@ def run(target_size: int = 64) -> dict:
     The new universe is written as ``promoted`` first, then ``kept``, so the
     freshest edges head the list. Also writes ``changes_YYYY-MM-DD.csv`` and
     sends (or, under dry-run, logs) a one-line WhatsApp summary.
+
+    ``persist`` is the operator preview seam: with ``persist=False`` (the CLI's
+    ``--dry-run``) the keep/drop/promote decision is computed and returned but
+    **nothing is written** -- no ``universe.json``, no ``changes_*.csv``, no
+    notification -- so an operator can see what the refresh *would* do before
+    letting it mutate the live book. The scheduled service always runs with the
+    default ``persist=True``.
     """
     current = universe.load()
     pool = _read_pool(CANDIDATES)
@@ -228,14 +235,75 @@ def run(target_size: int = 64) -> dict:
 
     new_universe = [*promoted, *kept]
     today = datetime.date.today().isoformat()
-    universe.save(
-        new_universe,
-        note=f"weekly refresh {today}: +{len(promoted)} / -{len(dropped)}",
-    )
-    _write_changes(kept, dropped, promoted)
-    _send_summary(kept, dropped, promoted)
+    if persist:
+        universe.save(
+            new_universe,
+            note=f"weekly refresh {today}: +{len(promoted)} / -{len(dropped)}",
+        )
+        _write_changes(kept, dropped, promoted)
+        _send_summary(kept, dropped, promoted)
+    else:
+        logger.info(
+            "dry-run weekly refresh: would keep %d, drop %d, promote %d; "
+            "nothing written",
+            len(kept),
+            len(dropped),
+            len(promoted),
+        )
 
     return {"kept": kept, "dropped": dropped, "promoted": promoted}
 
 
-__all__ = ["CANDIDATES", "run"]
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for the weekly refresh. Returns a process exit code.
+
+    This is what the ``intraday-breakout-universe.service`` unit runs
+    (``python3 -m universe_weekly``) and what an operator runs by hand to
+    preview a refresh (``python3 -m universe_weekly --dry-run``). ``--dry-run``
+    maps to ``run(persist=False)``: it prints the kept/dropped/promoted summary
+    and writes nothing.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="universe_weekly",
+        description="Weekly universe re-screen for the intraday breakout bot.",
+    )
+    parser.add_argument(
+        "--target-size",
+        type=int,
+        default=64,
+        help="target universe size after the refresh (default: 64).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="compute and print the changes without writing universe.json / "
+        "changes_*.csv or sending a notification.",
+    )
+    args = parser.parse_args(argv)
+
+    result = run(target_size=args.target_size, persist=not args.dry_run)
+
+    prefix = "[dry-run] " if args.dry_run else ""
+    print(
+        f"{prefix}kept: {len(result['kept'])}  "
+        f"dropped: {len(result['dropped'])}  "
+        f"promoted: {len(result['promoted'])}"
+    )
+    if result["promoted"]:
+        print("promoted: " + ", ".join(result["promoted"]))
+    if result["dropped"]:
+        print("dropped: " + ", ".join(result["dropped"]))
+    return 0
+
+
+__all__ = ["CANDIDATES", "main", "run"]
+
+
+if __name__ == "__main__":  # pragma: no cover - process entry point
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    raise SystemExit(main())

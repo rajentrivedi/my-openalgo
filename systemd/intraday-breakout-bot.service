@@ -1,0 +1,31 @@
+# OpenAlgo intraday breakout paper-trading bot — long-running session service.
+#
+# Install (as root):
+#   cp systemd/intraday-breakout-bot.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now intraday-breakout-bot.service
+#
+# The bot runs one trading session per process: it starts at boot, idles until
+# the plan window, trades the day, squares off at 15:15 IST and exits 0.
+# `Restart=always` brings it back up the next day (and after any crash);
+# `RestartSec=30` matches the loop's own poll cadence so a flap does not hammer
+# the broker. The session refuses to trade unless the account is in `analyze`
+# (paper) mode — see `config.assert_paper_only()` — so a misconfigured live key
+# aborts with exit 1 rather than placing real orders.
+[Unit]
+Description=OpenAlgo Intraday Breakout Paper Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pcadmin
+Group=pcadmin
+WorkingDirectory=/home/pcadmin/Documents/nse/openalgo/strategies/intraday_breakout_bot
+EnvironmentFile=/home/pcadmin/Documents/nse/openalgo/strategies/intraday_breakout_bot/.env
+ExecStart=/usr/bin/python3 -m bot
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
