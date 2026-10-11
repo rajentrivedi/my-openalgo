@@ -11,7 +11,8 @@ Rules this module obeys:
   write anything into `intraday-strategies/`.
 * Importing the module executes its imports but not its `main()`, which is
   guarded by `if __name__ == "__main__"`. To keep that guarantee, the module
-  is registered under a synthetic name ("bt") rather than "__main__".
+  is registered under a synthetic name (`_MODULE_NAME`) rather than
+  "__main__".
 * The resolved path is checked for existence *before* importing, so a missing
   file fails with a clear `FileNotFoundError` naming the path instead of an
   opaque `FileNotFoundError` from the import machinery.
@@ -20,12 +21,17 @@ Rules this module obeys:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import importlib.util
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # keeps pandas out of the loader's import-time dependencies
+    import pandas as pd
 
 #: Environment variable that overrides the backtest module location.
 ENV_PATH = "INTRADAY_BACKTEST_PATH"
@@ -84,28 +90,56 @@ def _is_server_repo_entry(entry: str) -> bool:
     return (root / "__init__.py").is_file() and (root / "strategies").is_dir()
 
 
-def _pin_sdk_openalgo() -> None:
+@contextlib.contextmanager
+def _pin_sdk_openalgo() -> Iterator[None]:
     """Make `import openalgo` resolve to the installed SDK, not the server repo.
 
     The backtest module executes `from openalgo import ta` at import time. That
     import is the loader's dependency, so the loader owns making it resolve to
-    the SDK. Shadowing entries are hidden only for the duration of the backtest
-    import and restored immediately afterwards, so the rest of the process (and
-    the server repo's own tests, which rely on the repo root being importable)
-    is unaffected.
+    the SDK.
+
+    This is a context manager, not a plain function, because the SDK has to stay
+    pinned for the whole duration of `exec_module` -- not just while the
+    import is forced -- and because both `sys.path` and `sys.modules` are
+    process-global state that must be handed back exactly as found on every
+    path, including a failing one. Anything the caller does inside the `with`
+    body is therefore covered by the restore.
+
+    Restoration is exact:
+
+    * `sys.path` entries are re-inserted at their original indices, not
+      appended, so import priority is unchanged for the rest of the process.
+    * `sys.modules["openalgo"]` is put back to the object that was there before
+      (a plain `setdefault` cannot do this: the SDK import has already claimed
+      the key by the time we restore). If nothing was there before, the key is
+      removed again rather than left pointing at the SDK.
+
+    This keeps the server repo's own tests, which rely on the repo root being
+    importable as `openalgo`, unaffected.
     """
     existing = sys.modules.get("openalgo")
     if existing is not None and hasattr(existing, "ta"):
+        yield
         return
 
-    shadowing = [e for e in sys.path if _is_server_repo_entry(e)]
-    if not shadowing:
+    if not any(_is_server_repo_entry(e) for e in sys.path):
+        yield
         return
 
-    for entry in shadowing:
-        sys.path.remove(entry)
-    popped = sys.modules.pop("openalgo", None)
+    # (index, entry) pairs for the shadowing entries, so each can be put back
+    # where it came from rather than appended to the tail of sys.path.
+    positions: list[tuple[int, str]] = []
+    previous_openalgo = None
     try:
+        # Both mutations live inside the try so that the restore in `finally`
+        # covers every path out of this block, including anything a future
+        # edit inserts between here and the yield.
+        positions = [
+            (i, e) for i, e in enumerate(sys.path) if _is_server_repo_entry(e)
+        ]
+        for _, entry in positions:
+            sys.path.remove(entry)
+        previous_openalgo = sys.modules.pop("openalgo", None)
         import openalgo  # noqa: F401
 
         if not hasattr(openalgo, "ta"):
@@ -114,10 +148,25 @@ def _pin_sdk_openalgo() -> None:
                 "the backtest module imports. The OpenAlgo SDK is required to "
                 "run the strategy."
             )
+        yield
     finally:
-        if popped is not None:
-            sys.modules.setdefault("openalgo", popped)
-        sys.path.extend(shadowing)
+        # The body may itself have touched sys.path, so drop any shadowing
+        # entry still present before reinserting; removing one that is already
+        # gone would raise and mask the real outcome.
+        for _, entry in positions:
+            while entry in sys.path:
+                sys.path.remove(entry)
+        # Re-insert in ascending original-index order, which reproduces the
+        # exact original list because each insertion shifts only later indices.
+        for index, entry in sorted(positions):
+            sys.path.insert(index, entry)
+        # Explicit assignment, not setdefault: `import openalgo` above has
+        # already installed the SDK under this key, so setdefault would silently
+        # discard the value we are trying to put back.
+        if previous_openalgo is None:
+            sys.modules.pop("openalgo", None)
+        else:
+            sys.modules["openalgo"] = previous_openalgo
 
 
 def load() -> Any:
@@ -138,8 +187,18 @@ def load() -> Any:
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot load backtest module from {path}")
     module = importlib.util.module_from_spec(spec)
-    _pin_sdk_openalgo()
-    spec.loader.exec_module(module)
+    # Register before exec_module, exactly as the import machinery does, so
+    # backtest code that resolves `cls.__module__` or imports itself by name
+    # during its own execution finds the (partially initialised) module.
+    sys.modules[_MODULE_NAME] = module
+    try:
+        with _pin_sdk_openalgo():
+            spec.loader.exec_module(module)
+    except BaseException:
+        # Do not leave a half-initialised module behind under a name other code
+        # could import.
+        sys.modules.pop(_MODULE_NAME, None)
+        raise
 
     _CACHE = module
     _CACHE_PATH = path
@@ -152,10 +211,17 @@ def args() -> argparse.Namespace:
 
 
 def plan_for_day(
-    df, day: datetime.date, args: argparse.Namespace
-) -> tuple[str, dict, Any] | None:
-    """Delegate to the backtest's `plan_for_day`."""
-    return load().plan_for_day(df, day, args)
+    df: pd.DataFrame,
+    day: datetime.date,
+    plan_args: argparse.Namespace,
+) -> tuple[str, dict, pd.Timestamp] | None:
+    """Delegate to the backtest's `plan_for_day`.
+
+    The third parameter is named `plan_args` rather than `args` so it cannot
+    shadow the module-level `args()` function within this body, which would
+    otherwise make `args` here mean two different things.
+    """
+    return load().plan_for_day(df, day, plan_args)
 
 
 def __getattr__(name: str) -> Any:
@@ -171,4 +237,11 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["IST", "args", "load", "plan_for_day"]
+# `IST` is supplied by the module-level `__getattr__` above, so static checkers
+# cannot see it defined here; `from backtest_source import *` still resolves it.
+__all__ = [  # noqa: F822
+    "IST",
+    "args",
+    "load",
+    "plan_for_day",
+]
