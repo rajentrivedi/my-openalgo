@@ -1,0 +1,288 @@
+"""Position sizing and pre-entry guardrails for the intraday breakout bot.
+
+Every entry in this bot passes through `evaluate` first. Nothing in `executor`
+(Task 7) is allowed to order without a `Decision` with `approved is True`, so
+this module is the only place where "how much, if anything" is decided.
+
+The sizing rule is deliberately blunt: risk a fixed rupee amount per trade
+(`risk_amount()`, 1% of the budget), divide by the plan's own
+`risk_per_share`, and floor to whole shares. Everything else here is a veto:
+
+* **Stop width.** A stop further than 3 ATR away is not this strategy's
+  trade; it is a different setup wearing its clothes. Rejected by ATR *and*
+  implied by a zero share count.
+* **Daily loss.** A flat book past the daily limit stops trading for the day.
+* **Concurrency.** Never more than `MAX_CONCURRENT` open positions.
+* **Margin.** The broker's own margin figure for the *proposed* position plus
+  everything already open, checked against available cash. A probe returned
+  ~25% of notional for a MIS intraday position, so four concurrent positions
+  roughly consume the whole ₹1L budget -- this is the gate that makes the
+  concurrency cap an economic constraint rather than an arbitrary one.
+
+Two properties are load-bearing and easy to regress:
+
+* **`size_for` never returns a negative or auto-raised quantity.** A stop wider
+  than the entire risk budget yields 0, not 1. A single share on a ₹1500 stop
+  would risk more than the whole per-trade budget; the correct answer is no
+  trade.
+* **`evaluate` has a fixed gate order** and reports the *first* gate that
+  fails, so a plan that is both waiting on volume and too wide says
+  `WATCH_VOLUME`, not `stop_too_wide`. The order is cheapest-to-decide first:
+  plan validity, plan quality, account state, then the one gate that costs an
+  API round trip.
+
+The `margin()` call carries two SDK quirks that are not optional: `quantity`
+must be a *string*, and `pricetype` must be `"MARKET"` -- sending `"SL"` with
+no price makes the broker reject the request with a Fyers `limitPrice` error
+before any margin maths happens.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from dataclasses import dataclass
+from typing import Any
+
+import config
+from planner import Plan
+
+logger = logging.getLogger(__name__)
+
+#: A stop further than this many ATRs is rejected as too wide.
+MAX_STOP_ATR = 3.0
+
+#: Reason vocabulary. `stop_too_wide` covers both the explicit ATR rejection
+#: and the zero-size outcome -- a stop too wide to size is the same failure.
+REASON_WATCH_VOLUME = "WATCH_VOLUME"
+REASON_STOP_TOO_WIDE = "stop_too_wide"
+REASON_DAILY_LOSS = "daily_loss_halt"
+REASON_CONCURRENCY = "concurrency_cap"
+REASON_MARGIN = "margin_blocked"
+
+
+@dataclass
+class Decision:
+    """Outcome of running one plan through the gate sequence.
+
+    `quantity` is the share count that was approved, and 0 for every rejected
+    plan. `reason` is `None` only when `approved` is True.
+    """
+
+    approved: bool
+    quantity: int = 0
+    reason: str | None = None
+
+
+def risk_amount() -> float:
+    """Rupees at risk per trade: `BUDGET * RISK_PCT / 100` (1000.0)."""
+    return config.BUDGET * config.RISK_PCT / 100.0
+
+
+def size_for(plan: Plan) -> int:
+    """Whole shares whose total stop risk fits inside `risk_amount()`.
+
+    Floored at 0 and *never* raised to 1. A zero result means the stop is
+    wider than the whole risk budget, which is a "do not trade" signal, not a
+    rounding artefact -- rounding it up would silently risk more than the
+    budget allows.
+    """
+    per_share = plan.risk_per_share
+    if per_share is None or not math.isfinite(per_share) or per_share <= 0:
+        return 0
+
+    shares = math.floor(risk_amount() / per_share)
+    return max(0, int(shares))
+
+
+def check_daily_loss(pnl: float) -> bool:
+    """True when `pnl` is at or past the daily loss limit -- i.e. halted.
+
+    The comparison is `<=`, so breaching the limit exactly halts rather than
+    allowing one more trade on the boundary.
+    """
+    return pnl <= -config.DAILY_LOSS_LIMIT
+
+
+def check_concurrency(open_count: int) -> bool:
+    """True when `open_count` positions already open blocks another entry."""
+    return open_count >= config.MAX_CONCURRENT
+
+
+def _payload_positions(
+    proposed: dict[str, Any], open_positions: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Shape proposed + open positions into the list `margin()` expects.
+
+    Every `quantity` is coerced with `str()` and every row carries
+    `pricetype="MARKET"`. Both are SDK requirements, not cosmetic: an integer
+    quantity is rejected by the API, and a non-MARKET pricetype is rejected by
+    the broker.
+    """
+    rows = []
+    for position in [proposed, *open_positions]:
+        row = dict(position)
+        row["quantity"] = str(row.get("quantity", 0))
+        row["pricetype"] = "MARKET"
+        rows.append(row)
+    return rows
+
+
+def _available_cash(data: dict[str, Any], api_client: Any) -> float | None:
+    """Best available estimate of spendable cash, or None if unobtainable.
+
+    Tried in order, cheapest and most authoritative first:
+
+    1. `availablecash` in the margin response itself -- the broker already told
+       us, no second round trip.
+    2. `api_client.funds()` -- the real SDK path.
+    3. A `cash` attribute on the client -- lets a caller (or a test double)
+       supply a known figure without an extra call.
+
+    Returns None when none of those produce a number. The caller treats that as
+    "cannot verify" rather than "cannot afford".
+    """
+    if isinstance(data, dict):
+        direct = data.get("availablecash")
+        if isinstance(direct, (int, float)):
+            return float(direct)
+
+    funds = getattr(api_client, "funds", None)
+    if callable(funds):
+        try:
+            response = funds()
+        except Exception as exc:  # noqa: BLE001 - a failed probe is not fatal
+            logger.warning("funds() failed while checking margin: %s", exc)
+            response = None
+        if isinstance(response, dict):
+            payload = response.get("data")
+            if isinstance(payload, dict):
+                available = payload.get("availablecash")
+                if isinstance(available, (int, float)):
+                    return float(available)
+
+    cash = getattr(api_client, "cash", None)
+    if isinstance(cash, (int, float)):
+        return float(cash)
+
+    return None
+
+
+def check_margin(
+    proposed: dict[str, Any],
+    open_positions: list[dict[str, Any]],
+    api_client: Any,
+    *,
+    available_cash: float | None = None,
+) -> tuple[bool, str]:
+    """Ask the broker whether the proposed position fits in available cash.
+
+    Returns `(ok, detail)`. `ok` is False when the margin call fails, returns a
+    non-success status, or when the required margin exceeds the cash we can
+    establish. When cash cannot be established at all the check passes -- it
+    has no evidence of a problem, and the sizing, ATR, daily-loss and
+    concurrency gates have already bounded the exposure. That is logged at
+    warning level so an unavailable cash figure is never silent.
+    """
+    positions = _payload_positions(proposed, open_positions)
+
+    try:
+        response = api_client.margin(positions=positions, pricetype="MARKET")
+    except Exception as exc:  # noqa: BLE001 - any broker/transport failure
+        logger.warning("margin call raised: %s", exc)
+        return False, f"margin call failed: {exc}"
+
+    if not isinstance(response, dict) or response.get("status") != "success":
+        return False, f"margin call failed: {response!r}"
+
+    data = response.get("data")
+    if not isinstance(data, dict):
+        return False, f"margin call failed: {response!r}"
+
+    try:
+        required = float(data["total_margin_required"])
+    except (KeyError, TypeError, ValueError):
+        return False, f"margin call failed: no total_margin_required in {data!r}"
+
+    cash = available_cash if available_cash is not None else _available_cash(data, api_client)
+
+    if cash is None:
+        logger.warning(
+            "margin required %.2f but available cash could not be determined; "
+            "allowing the trade to pass the margin gate",
+            required,
+        )
+        return True, f"margin ok: {required:.2f} required, cash unknown"
+
+    if required > cash:
+        return False, (
+            f"margin blocked: {required:.2f} required exceeds "
+            f"available {cash:.2f}"
+        )
+
+    return True, f"margin ok: {required:.2f} required of {cash:.2f} available"
+
+
+def evaluate(
+    plan: Plan,
+    open_count: int,
+    day_pnl: float,
+    open_positions: list[dict[str, Any]],
+    api_client: Any,
+) -> Decision:
+    """Run one plan through every guardrail; approve only if all pass.
+
+    Gate order is fixed and each gate reports before the next runs:
+
+        error -> WATCH_VOLUME -> stop_atr -> daily loss -> concurrency
+              -> zero size -> margin
+
+    Plan-level facts (error, volume confirmation, stop width) are checked before
+    account-level state (loss, concurrency), and the only gate that costs an
+    API round trip runs last, so a doomed plan never spends one. The first
+    failing gate is the one reported, which keeps the rejection reason
+    actionable rather than a list.
+    """
+    if plan.error is not None:
+        return Decision(approved=False, quantity=0, reason=plan.error)
+
+    if plan.status == REASON_WATCH_VOLUME:
+        return Decision(approved=False, quantity=0, reason=REASON_WATCH_VOLUME)
+
+    if plan.stop_atr is not None and plan.stop_atr > MAX_STOP_ATR:
+        return Decision(approved=False, quantity=0, reason=REASON_STOP_TOO_WIDE)
+
+    if check_daily_loss(day_pnl):
+        return Decision(approved=False, quantity=0, reason=REASON_DAILY_LOSS)
+
+    if check_concurrency(open_count):
+        return Decision(approved=False, quantity=0, reason=REASON_CONCURRENCY)
+
+    quantity = size_for(plan)
+    if quantity == 0:
+        return Decision(approved=False, quantity=0, reason=REASON_STOP_TOO_WIDE)
+
+    proposed = {
+        "symbol": plan.symbol,
+        "quantity": quantity,
+        "exchange": config.EXCHANGE,
+        "product": config.PRODUCT,
+    }
+    ok, detail = check_margin(proposed, open_positions, api_client)
+    if not ok:
+        logger.info("margin gate blocked %s: %s", plan.symbol, detail)
+        return Decision(approved=False, quantity=0, reason=REASON_MARGIN)
+
+    return Decision(approved=True, quantity=quantity, reason=None)
+
+
+__all__ = [
+    "MAX_STOP_ATR",
+    "Decision",
+    "check_concurrency",
+    "check_daily_loss",
+    "check_margin",
+    "evaluate",
+    "risk_amount",
+    "size_for",
+]
