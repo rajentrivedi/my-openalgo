@@ -76,6 +76,32 @@ class Decision:
     reason: str | None = None
 
 
+def _finite_number(value: Any) -> float | None:
+    """Coerce `value` to a finite float, or None if it is not one.
+
+    A single guard for every broker-supplied number in this module, because
+    each of these was a real defect at some point:
+
+    * `bool` is excluded explicitly -- `isinstance(True, int)` is True, so a
+      stray boolean would otherwise be read as a cash figure of `1.00`.
+    * Non-finite values are excluded. `float('nan')` in particular is the
+      canonical *undeterminable* figure: `required > nan` is False, so a NaN
+      cash figure would sail past every comparison and fail the gate **open**,
+      defeating the fail-closed rule. `inf` is rejected for the same reason --
+      it would wave through any finite requirement.
+    * `None` and non-numeric types (including strings) are excluded rather
+      than coerced, so a response-shape change surfaces as "unknown" instead
+      of as a plausible-looking number.
+
+    Returning None on rejection is deliberate: every caller treats None as
+    "cannot determine this", which is the fail-closed input.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
 def risk_amount() -> float:
     """Rupees at risk per trade: `BUDGET * RISK_PCT / 100` (1000.0)."""
     return config.BUDGET * config.RISK_PCT / 100.0
@@ -88,9 +114,14 @@ def size_for(plan: Plan) -> int:
     wider than the whole risk budget, which is a "do not trade" signal, not a
     rounding artefact -- rounding it up would silently risk more than the
     budget allows.
+
+    A `risk_per_share` that is not a finite number -- None, a string, NaN --
+    returns 0 rather than raising. This sits on the guardrail path, where a
+    malformed plan must yield a value the caller can act on; an exception
+    here would abort an entry loop over one bad plan.
     """
-    per_share = plan.risk_per_share
-    if per_share is None or not math.isfinite(per_share) or per_share <= 0:
+    per_share = _finite_number(plan.risk_per_share)
+    if per_share is None or per_share <= 0:
         return 0
 
     shares = math.floor(risk_amount() / per_share)
@@ -120,11 +151,34 @@ def _payload_positions(
     `pricetype="MARKET"`. Both are SDK requirements, not cosmetic: an integer
     quantity is rejected by the API, and a non-MARKET pricetype is rejected by
     the broker.
+
+    Open positions with no `quantity` key are **dropped**, not defaulted. A
+    fabricated `"0"` row would be sent to the broker as a real position and
+    inflate the broker-side position count, corrupting the very margin figure
+    this gate exists to read. A position we cannot describe is a position we
+    cannot account for, so the safe move is to leave it out and let the
+    drop show up in the log.
+
+    The proposed position is the exception: it is always sent, because
+    declining to send it would silently skip the margin check entirely.
     """
     rows = []
-    for position in [proposed, *open_positions]:
+    for position, is_proposed in [(proposed, True), *((p, False) for p in open_positions)]:
         row = dict(position)
-        row["quantity"] = str(row.get("quantity", 0))
+        quantity = row.get("quantity")
+
+        if quantity is None:
+            if is_proposed:
+                row["quantity"] = "0"
+            else:
+                logger.warning(
+                    "dropping open position with no quantity from the margin "
+                    "payload: %r",
+                    position,
+                )
+                continue
+
+        row["quantity"] = str(quantity)
         row["pricetype"] = "MARKET"
         rows.append(row)
     return rows
@@ -141,13 +195,18 @@ def _available_cash(data: dict[str, Any], api_client: Any) -> float | None:
     3. A `cash` attribute on the client -- lets a caller (or a test double)
        supply a known figure without an extra call.
 
-    Returns None when none of those produce a number. The caller treats that as
-    "cannot verify" rather than "cannot afford".
+    Every value passes through `_finite_number`, so a bool, a string, NaN or
+    infinity is treated as absent rather than as a cash figure. NaN is the
+    dangerous one: `required > nan` is False, so accepting it would make this
+    function approve a trade it should block.
+
+    Returns None when none of those produce a usable number. The caller treats
+    that as "cannot verify", and therefore blocks.
     """
     if isinstance(data, dict):
-        direct = data.get("availablecash")
-        if isinstance(direct, (int, float)):
-            return float(direct)
+        direct = _finite_number(data.get("availablecash"))
+        if direct is not None:
+            return direct
 
     funds = getattr(api_client, "funds", None)
     if callable(funds):
@@ -159,15 +218,11 @@ def _available_cash(data: dict[str, Any], api_client: Any) -> float | None:
         if isinstance(response, dict):
             payload = response.get("data")
             if isinstance(payload, dict):
-                available = payload.get("availablecash")
-                if isinstance(available, (int, float)):
-                    return float(available)
+                available = _finite_number(payload.get("availablecash"))
+                if available is not None:
+                    return available
 
-    cash = getattr(api_client, "cash", None)
-    if isinstance(cash, (int, float)):
-        return float(cash)
-
-    return None
+    return _finite_number(getattr(api_client, "cash", None))
 
 
 def check_margin(
@@ -207,10 +262,19 @@ def check_margin(
     if not isinstance(data, dict):
         return False, f"margin call failed: {response!r}"
 
-    try:
-        required = float(data["total_margin_required"])
-    except (KeyError, TypeError, ValueError):
-        return False, f"margin call failed: no total_margin_required in {data!r}"
+    required = _finite_number(data.get("total_margin_required"))
+    if required is None:
+        return False, f"margin call failed: no usable total_margin_required in {data!r}"
+
+    if required < 0:
+        # A negative requirement is not a small requirement, it is an
+        # unreadable one. Treat it as unknown and block rather than letting
+        # `-500 > cash` trivially succeed.
+        logger.error(
+            "margin gate BLOCKING: broker reported a negative total_margin_required "
+            "(%r); treating as undeterminable and failing closed", required,
+        )
+        return False, f"margin call failed: negative total_margin_required {required}"
 
     cash = available_cash if available_cash is not None else _available_cash(data, api_client)
 

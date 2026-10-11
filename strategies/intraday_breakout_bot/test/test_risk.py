@@ -1,4 +1,5 @@
 # test/test_risk.py
+import pytest
 import risk
 from planner import Plan
 
@@ -204,4 +205,217 @@ def test_margin_bad_status_still_blocks():
     ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [], BadStatusApi())
     assert ok is False
     assert "margin" in detail.lower()
+
+
+
+# --- Fix round 1 -------------------------------------------------------------
+#
+# 1. CRITICAL: a non-finite (NaN/inf) cash figure passed the `isinstance` guard,
+#    then `required > nan` evaluated False, so the gate returned True. NaN is
+#    the canonical *undeterminable* figure and must fail closed like any other.
+# 2. IMPORTANT: the documented gate order was unpinned -- every test above
+#    exercises exactly one gate, so reordering the middle gates stayed green.
+# 3. IMPORTANT: only `api.seen[0]` (the proposed row) was asserted for quantity
+#    coercion; a regression coercing just row 0 would have shipped green.
+
+
+class CountingApi(FakeApi):
+    """FakeApi that records how many times `margin()` was actually called."""
+
+    def __init__(self, total=25012, cash=100000):
+        super().__init__(total, cash)
+        self.calls = 0
+
+    def margin(self, *, positions, **kw):
+        self.calls += 1
+        return super().margin(positions=positions, **kw)
+
+
+NAN = float("nan")
+
+
+class NanCashApi:
+    """Margin succeeds, but available cash is NaN -- i.e. undeterminable."""
+
+    def __init__(self, cash=NAN):
+        self.cash = cash
+
+    def margin(self, *, positions, **kw):
+        return {"status": "success",
+                "data": {"total_margin_required": 400000,
+                         "span_margin": 400000, "exposure_margin": 0}}
+
+
+def test_nan_cash_in_margin_response_blocks():
+    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [], NanCashApi())
+    assert ok is False
+    assert "cash" in detail.lower()
+
+
+def test_nan_cash_from_funds_blocks():
+    class NanFunds(NanCashApi):
+        def funds(self):
+            return {"status": "success", "data": {"availablecash": NAN}}
+
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], NanFunds())
+    assert ok is False
+
+
+def test_infinite_cash_blocks():
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [],
+                              NanCashApi(cash=float("inf")))
+    assert ok is False
+
+
+def test_evaluate_does_not_approve_on_nan_cash():
+    d = risk.evaluate(plan(), 0, 0.0, [], NanCashApi())
+    assert d.approved is False
+    assert d.reason == "margin_blocked"
+
+
+def test_bool_cash_is_not_a_cash_figure():
+    """`isinstance(True, int)` is True, so a bool must be rejected explicitly.
+
+    Required margin is 0.5: if the bool were accepted as 1.00 this would
+    approve, so the test genuinely discriminates rather than blocking for an
+    unrelated reason.
+    """
+    class BoolCash:
+        def margin(self, *, positions, **kw):
+            return {"status": "success",
+                    "data": {"total_margin_required": 0.5, "availablecash": True}}
+
+        @property
+        def cash(self):
+            return True
+
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], BoolCash())
+    assert ok is False
+
+
+def test_negative_total_margin_required_is_rejected():
+    class NegativeRequired:
+        cash = 1e9
+
+        def margin(self, *, positions, **kw):
+            return {"status": "success",
+                    "data": {"total_margin_required": -500}}
+
+    ok, _ = risk.check_margin({"symbol": "A", "quantity": 1}, [], NegativeRequired())
+    assert ok is False
+
+
+def test_size_for_non_numeric_risk_per_share_returns_zero():
+    """The guardrail path must return a value, never raise."""
+    assert risk.size_for(plan(risk_per_share="20")) == 0
+    assert risk.size_for(plan(risk_per_share=object())) == 0
+    assert risk.size_for(plan(risk_per_share=float("nan"))) == 0
+
+
+def test_every_payload_row_has_string_quantity():
+    """A regression coercing only the proposed row must not ship green."""
+    api = CountingApi()
+    open_positions = [
+        {"symbol": "TCS", "quantity": 30},
+        {"symbol": "INFY", "quantity": -50},
+        {"symbol": "SBIN", "quantity": "75"},
+        {"symbol": "BHARTIARTL", "quantity": 10.0},
+    ]
+    ok, _ = risk.check_margin({"symbol": "RELIANCE", "quantity": 100},
+                              open_positions, api)
+    assert ok is True
+    assert len(api.seen) == 5                      # proposed + 4 open
+    assert all(isinstance(row["quantity"], str) for row in api.seen)
+    assert all(row["pricetype"] == "MARKET" for row in api.seen)
+    assert [row["quantity"] for row in api.seen] == ["100", "30", "-50", "75", "10.0"]
+
+
+def test_malformed_open_position_without_quantity_is_dropped():
+    """Sending a fabricated "0" row would inflate broker-side position count."""
+    api = CountingApi()
+    ok, _ = risk.check_margin({"symbol": "RELIANCE", "quantity": 100},
+                              [{"symbol": "TCS"}, {"symbol": "INFY", "quantity": 30}],
+                              api)
+    assert ok is True
+    assert [row["symbol"] for row in api.seen] == ["RELIANCE", "INFY"]
+
+
+# --- Gate order --------------------------------------------------------------
+#
+# Peels one gate at a time off an all-gates-violating plan. The reported reason
+# must be the earliest still-violated gate in the documented order:
+#   error -> WATCH_VOLUME -> stop_atr -> daily loss -> concurrency -> size 0 -> margin
+
+#: Documented gate order, in evaluation sequence.
+GATE_ORDER = ["error", "watch_volume", "stop_atr", "daily_loss",
+              "concurrency", "size_zero", "margin"]
+
+
+def _evaluate_violating(violated, api=None):
+    """Build a plan/session violating exactly `violated`, then evaluate it."""
+    api = api if api is not None else CountingApi()
+    p = plan()
+    open_count, day_pnl = 0, 0.0
+
+    if "error" in violated:
+        p.error = "history_error: boom"
+    if "watch_volume" in violated:
+        p.status = "WATCH_VOLUME"
+    if "stop_atr" in violated:
+        p.stop_atr = 3.5
+    if "size_zero" in violated:
+        p.risk_per_share = 1500.0
+    if "daily_loss" in violated:
+        day_pnl = -3000.0
+    if "concurrency" in violated:
+        open_count = 4
+    if "margin" in violated:
+        api = CountingApi(total=400000, cash=100000)
+
+    return risk.evaluate(p, open_count, day_pnl, [], api), api
+
+
+@pytest.mark.parametrize(
+    "violated,expected_reason",
+    [
+        (GATE_ORDER, "history_error: boom"),          # error wins over all
+        (GATE_ORDER[1:], "WATCH_VOLUME"),
+        (GATE_ORDER[2:], "stop_too_wide"),
+        (GATE_ORDER[3:], "daily_loss_halt"),
+        (GATE_ORDER[4:], "concurrency_cap"),
+        (GATE_ORDER[5:], "stop_too_wide"),           # zero size, margin still clean
+        (GATE_ORDER[6:], "margin_blocked"),
+        ([], None),
+    ],
+)
+def test_gate_order_reports_first_violation(violated, expected_reason):
+    violated = set(violated)
+    decision, api = _evaluate_violating(violated)
+    assert decision.reason == expected_reason
+    assert decision.approved is (expected_reason is None)
+    # Every gate except the last is cheaper than an API call, so an early
+    # block must never spend one: margin() runs only when nothing before it
+    # is violated.
+    should_call = violated <= {"margin"}
+    assert api.calls == (1 if should_call else 0), (
+        f"gate {expected_reason!r} called margin() {api.calls} time(s)"
+    )
+
+
+def test_earliest_gate_wins_over_later_ones_pairwise():
+    """Every earlier gate must outrank every later one, not just in sequence."""
+    for i, earlier in enumerate(GATE_ORDER[:-1]):
+        for later in GATE_ORDER[i + 1:]:
+            decision, _ = _evaluate_violating({earlier, later})
+            expected = {"error": "history_error: boom", "watch_volume": "WATCH_VOLUME",
+                        "stop_atr": "stop_too_wide", "daily_loss": "daily_loss_halt",
+                        "concurrency": "concurrency_cap", "size_zero": "stop_too_wide",
+                        "margin": "margin_blocked"}[earlier]
+            assert decision.reason == expected, f"{earlier} lost to {later}"
+
+
+def test_margin_is_the_only_gate_that_calls_the_api():
+    decision, api = _evaluate_violating({"margin"})
+    assert decision.reason == "margin_blocked"
+    assert api.calls == 1
 
