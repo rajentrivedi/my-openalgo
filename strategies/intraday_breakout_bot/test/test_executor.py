@@ -16,6 +16,7 @@ that test and nothing else.
 """
 
 import datetime as dt
+import inspect
 from decimal import Decimal
 
 import config
@@ -47,23 +48,64 @@ def plan(**kw):
 
 
 class FakeApi:
+    """In-memory client double whose signatures mirror the real SDK.
+
+    `**kw` on every method would let a call the real SDK would reject pass
+    here, which is exactly how the executor's `orderid`/positional-`order_id`
+    bugs survived 88 tests. These are keyword-only with the SDK's required
+    parameters, so a call that would `TypeError` live also `TypeError`s here.
+    """
+
     def __init__(self):
-        self.orders, self.modified, self.cancelled, self.closed = [], [], [], []
+        self.orders, self.placed = [], []
+        self.modified, self.cancelled, self.closed = [], [], []
         self.margin_calls = []
 
-    def placesmartorder(self, **kw):
-        self.orders.append(kw)
+    def placeorder(
+        self, *, strategy="Python", symbol, action, exchange,
+        price_type="MARKET", product="MIS", quantity=1, **kw,
+    ):
+        self.placed.append(
+            dict(symbol=symbol, action=action, exchange=exchange,
+                 price_type=price_type, product=product,
+                 quantity=quantity, **kw)
+        )
+        return {"status": "success", "data": {"orderid": f"P{len(self.placed)}"}}
+
+    def placesmartorder(
+        self, *, strategy="Python", symbol, action, exchange,
+        price_type="MARKET", product="MIS", quantity=1, position_size, **kw,
+    ):
+        self.orders.append(
+            dict(symbol=symbol, action=action, exchange=exchange,
+                 price_type=price_type, product=product,
+                 quantity=quantity, position_size=position_size, **kw)
+        )
         return {"status": "success", "data": {"orderid": f"O{len(self.orders)}"}}
 
-    def modifyorder(self, **kw):
-        self.modified.append(kw)
+    def modifyorder(
+        self, *, order_id, strategy="Python", symbol, action, exchange,
+        price_type="LIMIT", product, quantity, price,
+        disclosed_quantity="0", trigger_price="0", **kw,
+    ):
+        self.modified.append(
+            {
+                "order_id": order_id, "symbol": symbol, "action": action,
+                "exchange": exchange, "price_type": price_type,
+                "product": product, "quantity": quantity, "price": price,
+                "disclosed_quantity": disclosed_quantity,
+                "trigger_price": trigger_price,
+            }
+        )
         return {"status": "success"}
 
-    def cancelorder(self, order_id, **kw):
+    def cancelorder(self, *, order_id, strategy="Python", **kw):
         self.cancelled.append(order_id)
+        return {"status": "success"}
 
-    def closeposition(self, **kw):
+    def closeposition(self, *, strategy="Python", **kw):
         self.closed.append(kw)
+        return {"status": "success"}
 
     def margin(self, positions=None, pricetype=None):
         self.margin_calls.append(positions or [])
@@ -116,9 +158,11 @@ def test_place_entry_uses_stop_limit():
     api = FakeApi()
     ex = Executor(api)
     trade = ex.place_entry(plan(), Decision(50))
-    assert api.orders[0]["price_type"] == "SL"
-    assert api.orders[0]["trigger_price"] == 3500.0
-    assert api.orders[0]["quantity"] == 50
+    o = api.orders[0]
+    assert o["price_type"] == "SL"
+    assert o["trigger_price"] == 3500.0
+    assert o["quantity"] == 50
+    assert o["action"] == "BUY" and o["position_size"] == 50
     assert trade.state == "entry_pending"
 
 
@@ -129,15 +173,18 @@ def test_refuses_second_entry_for_same_symbol():
         ex.place_entry(plan(), Decision(50))
 
 
-def test_on_entry_filled_places_bracket_legs():
+def test_on_entry_filled_places_stop_and_target_legs():
     api = FakeApi()
     ex = Executor(api)
     trade = ex.place_entry(plan(), Decision(50))
     ex.on_entry_filled(trade, 3500.0)
-    bracket = api.orders[1]
-    assert bracket["price_type"] == "SL-M"
-    assert bracket["stoploss"] == 3480.0
-    assert bracket["target"] == 3543.0
+    stop, target = api.placed[0], api.placed[1]
+    assert stop["price_type"] == "SL-M" and stop["trigger_price"] == 3480.0
+    assert stop["action"] == "SELL" and stop["quantity"] == 50
+    assert target["price_type"] == "LIMIT" and target["price"] == 3543.0
+    assert target["action"] == "SELL"
+    assert trade.stop_order_id and trade.target_order_id
+    assert trade.stop_order_id != trade.target_order_id
 
 
 def test_on_t1_touched_moves_stop_to_t1_without_partial():
@@ -146,9 +193,11 @@ def test_on_t1_touched_moves_stop_to_t1_without_partial():
     trade = ex.place_entry(plan(), Decision(50))
     ex.on_entry_filled(trade, 3500.0)
     ex.on_t1_touched(trade)
-    assert api.modified[0]["trigger_price"] == 3520.0
+    m = api.modified[0]
+    assert m["order_id"] == trade.stop_order_id
+    assert m["action"] == "SELL" and m["trigger_price"] == 3520.0
     assert trade.t1_hit is True
-    assert trade.qty == 50  # unchanged: no partial exit
+    assert trade.qty == 50
 
 
 def test_cancel_stale_entry_at_expiry():
@@ -608,7 +657,7 @@ def test_bracket_stop_is_rounded_to_the_tick_grid():
     ex = Executor(api)
     trade = ex.place_entry(plan(stop=3479.97), Decision(50))
     ex.on_entry_filled(trade, 3500.0)
-    assert api.orders[1]["stoploss"] == 3479.95
+    assert api.placed[0]["trigger_price"] == 3479.95
 
 
 def test_r_is_measured_against_the_planned_stop_not_the_rounded_one():
@@ -628,8 +677,9 @@ def test_stop_that_rounds_onto_the_fill_is_rejected_and_flattened():
     ex = Executor(api)
     trade = ex.place_entry(plan(stop=3500.02), Decision(50))
     ex.on_entry_filled(trade, 3500.0)
-    assert len(api.orders) == 1  # no bracket placed
-    assert len(api.closed) == 1  # naked position immediately flattened
+    assert len(api.orders) == 1  # entry placed, no bracket legs
+    assert len(api.placed) == 1  # naked position flattened with a counter order
+    assert api.placed[0]["price_type"] == "MARKET"
     assert trade.state == "exited"
 
 
@@ -647,9 +697,9 @@ def test_short_bracket_rounds_stop_up_and_target_down():
     p = plan(side="SHORT", entry=3500.0, stop=3501.03, target1=3480.0, target2=3457.03)
     trade = ex.place_entry(p, Decision(50))
     ex.on_entry_filled(trade, 3500.0)
-    bracket = api.orders[1]
-    assert bracket["stoploss"] == 3501.05  # away from the fill: more protective
-    assert bracket["target"] == 3457.0  # toward the fill: never lowered
+    stop, target = api.placed[0], api.placed[1]
+    assert stop["trigger_price"] == 3501.05  # away from the fill: more protective
+    assert target["price"] == 3457.0  # toward the fill: never lowered
 
 
 # --- exit accounting ---------------------------------------------------
@@ -779,7 +829,8 @@ def test_square_off_closes_and_journals():
     trade = ex.place_entry(plan(), Decision(50))
     ex.on_entry_filled(trade, 3500.0)
     ex.square_off(trade, price=3505.0)
-    assert api.closed[0]["position_size"] == 50
+    assert api.placed[-1]["price_type"] == "MARKET"
+    assert api.placed[-1]["action"] == "SELL" and api.placed[-1]["quantity"] == 50
     row = journal.read_day(_today()).iloc[-1]
     assert row["stage"] == "squareoff"
     assert row["reason"] == "SQUAREOFF"
@@ -793,8 +844,25 @@ def test_square_off_is_idempotent():
     trade = ex.place_entry(plan(), Decision(50))
     ex.on_entry_filled(trade, 3500.0)
     ex.square_off(trade, price=3505.0)
+    placed_after_first = len(api.placed)
     ex.square_off(trade, price=3505.0)
-    assert len(api.closed) == 1
+    assert len(api.placed) == placed_after_first
+
+
+def test_square_off_all_flattens_every_position_with_one_global_close():
+    api = FakeApi()
+    ex = Executor(api)
+    a = ex.place_entry(plan(), Decision(50))
+    ex.on_entry_filled(a, 3500.0)
+    b = ex.place_entry(plan(symbol="INFY", entry=100.0, stop=98.0), Decision(10))
+    ex.on_entry_filled(b, 100.0)
+
+    ex.square_off_all()
+
+    assert len(api.closed) == 1 and api.closed[0] == {}
+    assert api.placed[-2:] and all(p["price_type"] != "MARKET" for p in api.placed[-2:])
+    assert ex.open_positions == {}
+    assert a.state == "exited" and b.state == "exited"
 
 
 # --- reconcile --------------------------------------------------------
@@ -995,8 +1063,8 @@ def test_square_off_places_no_close_order_under_dry_run(monkeypatch):
 
     Deleting the `if config.DRY_RUN:` guard from `square_off` used to leave all
     88 tests green, because every other dry-run assertion covered only
-    `orders`/`modified`/`cancelled`. `api.closed` was never checked and
-    `square_off` was never called in dry mode. This is that test.
+    `orders`/`modified`/`cancelled`. `api.closed` and `api.placed` were never
+    checked and `square_off` was never called in dry mode. This is that test.
     """
     monkeypatch.setattr(config, "DRY_RUN", True)
     api = FakeApi()
@@ -1006,6 +1074,7 @@ def test_square_off_places_no_close_order_under_dry_run(monkeypatch):
 
     ex.square_off(trade, price=3505.0)
 
+    assert api.placed == [], "square_off sent a counter order during DRY_RUN"
     assert api.closed == [], "square_off called closeposition during DRY_RUN"
     assert api.orders == []
     assert api.modified == []
@@ -1034,12 +1103,14 @@ def test_square_off_really_closes_when_not_dry(monkeypatch):
     trade = ex.place_entry(plan(), Decision(50))
     ex.on_entry_filled(trade, 3500.0)
     ex.square_off(trade, price=3505.0)
-    assert len(api.closed) == 1
-    assert api.closed[0]["symbol"] == "TCS"
+    flat = [p for p in api.placed if p["price_type"] == "MARKET"]
+    assert len(flat) == 1
+    assert flat[0]["symbol"] == "TCS"
+    assert flat[0]["action"] == "SELL"
 
 
 def test_dry_run_never_reaches_a_write_api_across_the_whole_module(monkeypatch):
-    """One sweep over every state transition, checking all four write calls."""
+    """One sweep over every state transition, checking every write call."""
     monkeypatch.setattr(config, "DRY_RUN", True)
     api = FakeApi()
     ex = Executor(api)
@@ -1057,7 +1128,12 @@ def test_dry_run_never_reaches_a_write_api_across_the_whole_module(monkeypatch):
     ex.on_entry_filled(late, 900.0)
     ex.square_off(late, price=901.0)
 
+    ex.place_entry(plan(symbol="HDFC", entry=1500.0, stop=1495.0), Decision(10))
+    ex.square_off_all()
+    ex.cancel_resting("DRY-x")
+
     assert api.orders == []
+    assert api.placed == []
     assert api.modified == []
     assert api.cancelled == []
     assert api.closed == []
@@ -1117,3 +1193,99 @@ def test_decide_read_apis_are_permitted_in_dry_run(monkeypatch):
     assert decision.approved is True
     # ...and still no write.
     assert api.orders == [] and api.closed == [] and api.modified == []
+
+
+# --- round 2: every order call is checked against the installed SDK ----
+
+
+def _binds(method, payload):
+    inspect.signature(method).bind(None, **payload)
+
+
+def _installed_openalgo_api():
+    """The installed `openalgo.api` class, even when the platform repo shadows it.
+
+    Running pytest from inside the OpenAlgo platform checkout puts the repo root
+    -- which contains its own `openalgo/` package directory -- ahead of
+    site-packages on `sys.path`, so a plain `from openalgo import api` resolves
+    to the repo and raises ImportError. The SDK directory is placed first for
+    the import, then the path and the module cache are restored.
+    """
+    import site
+    import sys
+
+    parents = [*site.getsitepackages(), site.getusersitepackages()]
+    sdk_parent = next(
+        (p for p in parents if __import__("os").path.isfile(
+            __import__("os").path.join(p, "openalgo", "__init__.py")
+        )),
+        None,
+    )
+    if sdk_parent is None:
+        pytest.skip("openalgo SDK is not installed")
+    cached = sys.modules.pop("openalgo", None)
+    sys.path.insert(0, sdk_parent)
+    try:
+        from openalgo import api as openalgo_api
+    finally:
+        sys.path.remove(sdk_parent)
+        if cached is not None:
+            sys.modules["openalgo"] = cached
+    return openalgo_api
+
+
+def test_executor_order_payloads_bind_against_the_real_sdk():
+    """A payload the real SDK would reject must fail here, not live.
+
+    `FakeApi` mirrors the SDK by hand, so a future SDK rename would be absorbed
+    by its own `**kw` unless we bind the recorded payloads against the
+    installed client directly. This is what turns the executor's historical
+    `orderid` / positional-`order_id` bugs into a test failure.
+    """
+    openalgo_api = _installed_openalgo_api()
+
+    api = FakeApi()
+    ex = Executor(api)
+    trade = ex.place_entry(plan(), Decision(50))
+    ex.on_entry_filled(trade, 3500.0)
+    ex.on_t1_touched(trade)
+    ex.on_exit_filled(trade, 3520.0, "T1_TRAIL")
+
+    pending = ex.place_entry(plan(symbol="INFY", entry=100.0, stop=98.0), Decision(10))
+    pending.expires_at = dt.datetime(2020, 1, 1, 10, 0, tzinfo=executor.TZ)
+    ex.cancel_stale_entry(pending)
+
+    live = ex.place_entry(plan(symbol="SBIN", entry=900.0, stop=898.0), Decision(10))
+    ex.on_entry_filled(live, 900.0)
+    ex.square_off(live, price=901.0)
+
+    for kw in api.orders:
+        _binds(openalgo_api.placesmartorder, kw)
+    for kw in api.placed:
+        _binds(openalgo_api.placeorder, kw)
+    for kw in api.modified:
+        _binds(openalgo_api.modifyorder, kw)
+    for oid in api.cancelled:
+        _binds(openalgo_api.cancelorder, {"order_id": oid})
+    _binds(openalgo_api.closeposition, {})
+    assert api.orders and api.placed and api.modified and api.cancelled
+
+    # The bracket legs carry ONLY supported keys - no stoploss/target.
+    for leg in api.placed:
+        assert set(leg) <= {"symbol", "action", "exchange", "price_type",
+                            "product", "quantity", "price", "trigger_price"}
+
+
+def test_cancel_resting_cancels_through_the_executor(monkeypatch):
+    monkeypatch.setattr(config, "DRY_RUN", False)
+    api = FakeApi()
+    ex = Executor(api)
+    ex.cancel_resting("O7")
+    assert api.cancelled == ["O7"]
+
+
+def test_cancel_resting_is_a_noop_for_a_missing_id():
+    api = FakeApi()
+    ex = Executor(api)
+    ex.cancel_resting(None)
+    assert api.cancelled == []

@@ -129,17 +129,24 @@ def test_replay_exercises_the_t1_stop_modification(monkeypatch):
 
     assert result["reason"] == "T1_TRAIL"
     assert len(api.modified) == 1
-    assert api.modified[0]["trigger_price"] == planned[1]["target1"]
+    m = api.modified[0]
+    side = planned[0]
+    exit_side = "BUY" if side == "SHORT" else "SELL"
+    assert m["trigger_price"] == planned[1]["target1"]
+    assert m["action"] == exit_side and m["order_id"].startswith("P")
     # No partial exit: nothing was closed, and the bracket is still full size.
     assert api.closed == []
-    assert api.modified[0]["position_size"] == 1
-    # The protective bracket really was placed on the fill, before T1. `replay`
-    # models the entry as already filled (the broker's job), so the only order
-    # it places is the SL-M bracket.
-    assert len(api.orders) == 1
-    assert api.orders[0]["price_type"] == "SL-M"
-    assert api.orders[0]["stoploss"] == planned[1]["stop"]
-    assert api.orders[0]["target"] == planned[1]["target2"]
+    # The bracket is two legs placed on fill -- an SL-M stop and a LIMIT
+    # target, both on the exit side -- and the T1 modify moves the stop toward
+    # target1 (down for a short, up for a long).
+    assert len(api.placed) == 2
+    stop, target = api.placed[0], api.placed[1]
+    assert stop["price_type"] == "SL-M" and stop["action"] == exit_side
+    assert target["price_type"] == "LIMIT" and target["action"] == exit_side
+    if planned[0] == "SHORT":
+        assert m["trigger_price"] < stop["trigger_price"]
+    else:
+        assert m["trigger_price"] > stop["trigger_price"]
 
 
 # --- the entry-bar rule, pinned so it cannot regress in either direction ---

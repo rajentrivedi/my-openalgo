@@ -45,6 +45,7 @@ from typing import Any
 
 import config
 import executor
+import monitor
 import notify
 import planner
 import universe
@@ -251,29 +252,26 @@ class Bot:
     def _manage_open(self, now: datetime.datetime) -> None:
         """Housekeep open positions for `now`.
 
-        The orchestrator owns the one time-driven action here: cancelling a
-        still-working entry whose horizon has passed. Fill resolution and
-        bar-driven exits are driven by the market-data feed, not by this
-        wall-clock pass. Iterates a snapshot because `cancel_stale_entry`
-        mutates `open_positions`.
+        Fill and exit resolution are driven by this wall-clock pass: there is no
+        separate market-data feed, so each still-open trade is polled once here
+        for a completed entry (or a dead one), a T1 touch, and a filled stop or
+        target leg. Iterates a snapshot because the poll mutates
+        `open_positions`; one trade that raises must not abort the pass.
         """
         for trade in list(self.executor.open_positions.values()):
             try:
-                self.executor.cancel_stale_entry(trade, now=now)
+                monitor.poll(self.api, self.executor, trade, now=now)
             except Exception as exc:  # noqa: BLE001 - one bad trade must not abort the pass
                 logger.warning("managing %s failed: %s", trade.symbol, exc)
 
     def _square_off_all(self) -> None:
         """Flatten every open position at the square-off deadline.
 
-        Iterates a snapshot of the values because `square_off` removes each
-        trade from `open_positions` as it closes it.
+        Delegates to the executor's single global close: one broker
+        `closeposition` flattens the whole book, and the executor marks every
+        open trade exited and journals the square-off.
         """
-        for trade in list(self.executor.open_positions.values()):
-            try:
-                self.executor.square_off(trade)
-            except Exception as exc:  # noqa: BLE001 - keep flattening the rest
-                logger.error("square-off failed for %s: %s", trade.symbol, exc)
+        self.executor.square_off_all()
 
     # -- broker reads -------------------------------------------------------
 

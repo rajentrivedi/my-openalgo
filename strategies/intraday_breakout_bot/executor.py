@@ -159,6 +159,17 @@ def entry_limit_price(plan: Plan, atr: float) -> float:
     return entry + offset if plan.side == "LONG" else entry - offset
 
 
+def exit_action(side: str) -> str:
+    """The order action that closes a position opened on `side`.
+
+    A LONG is closed by a SELL and a SHORT by a BUY. Kept in one place because
+    every exit path -- the resting stop, the T1 trail, the target, the
+    square-off counter order -- must agree, and a side-flipped exit leg is a
+    silent hedge rather than a close.
+    """
+    return "SELL" if side == "LONG" else "BUY"
+
+
 def _as_datetime(value: Any) -> datetime.datetime | None:
     """Coerce `value` to an aware `datetime`, or None.
 
@@ -575,10 +586,12 @@ class Executor:
 
         payload = {
             "symbol": plan.symbol,
+            "action": "BUY" if plan.side == "LONG" else "SELL",
             "exchange": config.EXCHANGE,
             "product": config.PRODUCT,
             "price_type": "SL",
             "quantity": qty,
+            "position_size": qty if plan.side == "LONG" else -qty,
             "trigger_price": trigger,
             "price": limit,
         }
@@ -628,22 +641,24 @@ class Executor:
     # -- fill and bracket ---------------------------------------------------
 
     def on_entry_filled(self, trade: Trade, fill_price: float) -> None:
-        """Record the entry fill and place the resting SL / T2 bracket.
+        """Record the entry fill and place the resting stop and target legs.
 
-        The bracket is one `placesmartorder` with `price_type="SL-M"` and the
-        `stoploss` / `target` fields, so the **broker** holds both legs for the
-        life of the position rather than this process polling and re-sending
-        them. That matters most for the stop: a stop that depends on the bot
-        process being alive is not a stop.
+        OpenAlgo has no broker-held bracket: `stoploss` / `target` are GTT-only
+        and `placesmartorder` / `placeorder` do not accept them, so the stop and
+        the target are placed as **two separate orders** -- a `SL-M` stop and a
+        `LIMIT` target, both on the exit side. The stop is the one that matters
+        most: a stop that depends on this process polling and re-sending it is
+        not a stop. The stop leg is placed first, so a refused stop flattens the
+        naked position before any target leg exists.
 
-        Review focus #5: the stop and target are rounded to `TICK_SIZE` for
-        the order and then re-validated. Rounding can move a stop onto or past
-        the fill (a stop only 0.02 away rounds to the fill price), which the
-        broker would reject -- or, worse, accept at a distance that no longer
-        matches the risk the position was sized for. If the re-validation
-        fails, the bracket is **not** placed and the naked position is
-        immediately squared off: an unprotected position is the one outcome
-        that must never persist.
+        Review focus #5: the stop and target are rounded to `TICK_SIZE` for the
+        order and then re-validated. Rounding can move a stop onto or past the
+        fill (a stop only 0.02 away rounds to the fill price), which the broker
+        would reject -- or, worse, accept at a distance that no longer matches
+        the risk the position was sized for. If the re-validation fails, or the
+        stop leg is refused, no protective stop exists and the naked position is
+        immediately squared off: an unprotected position is the one outcome that
+        must never persist.
         """
         trade.entry_price = float(fill_price)
         trade.state = "entry_filled"
@@ -654,29 +669,38 @@ class Executor:
             self._reject_bracket(trade, fill_price)
             return
 
-        payload = {
+        side = exit_action(trade.side)
+        stop_payload = {
             "symbol": trade.symbol,
+            "action": side,
             "exchange": config.EXCHANGE,
             "product": config.PRODUCT,
             "price_type": "SL-M",
             "quantity": trade.qty,
-            "position_size": trade.qty,
-            "stoploss": stop,
-            "target": target,
+            "trigger_price": stop,
+        }
+        target_payload = {
+            "symbol": trade.symbol,
+            "action": side,
+            "exchange": config.EXCHANGE,
+            "product": config.PRODUCT,
+            "price_type": "LIMIT",
+            "quantity": trade.qty,
+            "price": target,
         }
 
         if config.DRY_RUN:
             trade.stop_order_id = self._next_dry_order_id()
-            trade.target_order_id = trade.stop_order_id
-            logger.info("DRY_RUN bracket (not sent): %r", payload)
+            trade.target_order_id = self._next_dry_order_id()
+            logger.info("DRY_RUN stop/target legs (not sent): %r %r", stop_payload, target_payload)
         else:
-            response = self.api.placesmartorder(**payload)
-            order_id = self._order_id(response)
-            # SL-M returns one order id covering both legs; recording it as the
-            # stop id is what lets `reconcile` tell a bracketed position from
-            # a naked one.
-            trade.stop_order_id = order_id or None
-            trade.target_order_id = order_id or None
+            trade.stop_order_id = self._order_id(self.api.placeorder(**stop_payload)) or None
+            if trade.stop_order_id is None:
+                # No protective stop: journal the fault and flatten the naked
+                # position rather than leave it open unprotected.
+                self._reject_bracket(trade, fill_price)
+                return
+            trade.target_order_id = self._order_id(self.api.placeorder(**target_payload)) or None
 
         self._record(
             trade,
@@ -684,7 +708,7 @@ class Executor:
             decision="filled",
             entry_price=trade.entry_price,
             note=(
-                f"bracket stop={stop} target={target}"
+                f"stop={stop} target={target}"
                 + (" [DRY_RUN]" if config.DRY_RUN else "")
             ),
         )
@@ -847,14 +871,16 @@ class Executor:
 
         trigger = round_tick(float(trade.target1), trade.side == "LONG")
         payload = {
-            "orderid": trade.stop_order_id,
+            "order_id": trade.stop_order_id,
             "symbol": trade.symbol,
+            "action": exit_action(trade.side),
             "exchange": config.EXCHANGE,
             "product": config.PRODUCT,
             "price_type": "SL-M",
             "trigger_price": trigger,
+            "price": trigger,
             "quantity": trade.qty,
-            "position_size": trade.qty,
+            "disclosed_quantity": "0",
         }
 
         if config.DRY_RUN:
@@ -950,7 +976,7 @@ class Executor:
         if config.DRY_RUN:
             logger.info("DRY_RUN cancel (not sent): %s", trade.entry_order_id)
         else:
-            self.api.cancelorder(trade.entry_order_id, symbol=trade.symbol)
+            self.api.cancelorder(order_id=trade.entry_order_id)
 
         trade.state = "cancelled"
         self.open_positions.pop(trade.symbol, None)
@@ -975,8 +1001,43 @@ class Executor:
             reason="EXPIRY",
         )
 
+    def drop_unfilled(self, trade: Trade, *, reason: str = "order_rejected") -> None:
+        """Drop a never-filled entry that the broker rejected or cancelled.
+
+        The monitor calls this when a still-working entry order comes back dead:
+        the trade never filled, so there is no position to flatten -- it is
+        removed from `open_positions` and journalled (default `order_rejected`)
+        so the symbol is accounted for. Obeys the same "the executor owns
+        `open_positions`" invariant as every other transition; the monitor never
+        pops the dict itself.
+        """
+        self.open_positions.pop(trade.symbol, None)
+        trade.state = "cancelled"
+
+        self._record(
+            trade,
+            stage="order",
+            decision="skipped",
+            reason=reason,
+            order_id=trade.entry_order_id or "",
+            note="entry order did not fill",
+        )
+        self._notify(
+            "CANCEL",
+            symbol=trade.symbol,
+            side=trade.side,
+            qty=trade.qty,
+            order_id=trade.entry_order_id,
+            reason=reason,
+        )
+
     def square_off(self, trade: Trade, *, price: float | None = None) -> None:
         """Flatten `trade` at the 15:15 square-off. Journals `SQUAREOFF`.
+
+        Sends a counter **MARKET** order for the trade's size. `closeposition`
+        is not used here because it is a *global* close: it would flatten every
+        holding on the account, not just this trade, which is wrong for the
+        per-trade paths (the scheduled pass and the bracket-rejection flatten).
 
         Used both by the scheduled 15:15 pass and by the bracket-rejection
         path, where a position exists but has no protective stop and must not
@@ -987,15 +1048,17 @@ class Executor:
 
         payload = {
             "symbol": trade.symbol,
+            "action": exit_action(trade.side),
             "exchange": config.EXCHANGE,
             "product": config.PRODUCT,
-            "position_size": trade.qty,
+            "price_type": "MARKET",
+            "quantity": trade.qty,
         }
 
         if config.DRY_RUN:
             logger.info("DRY_RUN square-off (not sent): %r", payload)
         else:
-            self.api.closeposition(**payload)
+            self.api.placeorder(**payload)
 
         self.open_positions.pop(trade.symbol, None)
         trade.state = "exited"
@@ -1018,6 +1081,55 @@ class Executor:
             exit_price=trade.exit_price,
             reason="SQUAREOFF",
         )
+
+    def cancel_resting(self, order_id: str | None) -> None:
+        """Cancel one resting leg through the executor. Honours DRY_RUN.
+
+        A no-op for a missing id, so a caller that could not read the leg's id
+        (a refused or unreported leg) does not send a malformed cancel.
+        """
+        if not order_id:
+            return
+        if config.DRY_RUN:
+            logger.info("DRY_RUN cancel resting leg (not sent): %s", order_id)
+            return
+        self.api.cancelorder(order_id=order_id)
+
+    def square_off_all(self) -> None:
+        """Flatten every open position at the 15:15 deadline with one close.
+
+        Unlike `square_off` (one symbol, counter market order), the deadline
+        needs everything flat in one shot: `closeposition()` closes the whole
+        account. Each open trade is then reconciled locally -- marked exited and
+        journalled `SQUAREOFF` -- so the bookkeeping matches the close we just
+        asked for.
+        """
+        trades = list(self.open_positions.values())
+        if not trades:
+            return
+        if config.DRY_RUN:
+            logger.info("DRY_RUN global square-off (not sent)")
+        else:
+            self.api.closeposition()
+        for trade in trades:
+            self.open_positions.pop(trade.symbol, None)
+            trade.state = "exited"
+            trade.exit_reason = "SQUAREOFF"
+            self._record(
+                trade,
+                stage="squareoff",
+                decision="exited",
+                reason="SQUAREOFF",
+                note="[DRY_RUN]" if config.DRY_RUN else "",
+            )
+            self._notify(
+                "SQUAREOFF",
+                symbol=trade.symbol,
+                side=trade.side,
+                qty=trade.qty,
+                exit_price=trade.exit_price,
+                reason="SQUAREOFF",
+            )
 
     def _settle(self, trade: Trade, exit_price: float) -> None:
         """Compute R and pnl for an exit we already know the price of."""
@@ -1151,6 +1263,7 @@ __all__ = [
     "Trade",
     "assert_position_rows",
     "entry_limit_price",
+    "exit_action",
     "is_expired",
     "journal_reason",
     "round_tick",

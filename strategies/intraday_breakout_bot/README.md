@@ -2,7 +2,7 @@
 
 An OpenAlgo **paper-trading** bot for an intraday breakout strategy on a screened
 NIFTY-500 universe. It wakes with the market, plans and places bracket entries in
-the mid-morning window, manages open positions off the 5-minute bar feed, and
+the mid-morning window, manages open positions on a 30-second wall-clock pass, and
 hard-flattens everything at 15:15 IST.
 
 > **Paper-only by design.** The bot refuses to start unless the connected
@@ -110,6 +110,30 @@ sudo systemctl restart intraday-breakout-bot.service
 be in `analyze` mode or `assert_paper_only()` aborts the start. This project does
 **not** support real-money trading — keep the account on paper.
 
+### What the bot does with a live paper position
+
+There is no separate market-data feed. Every 30 seconds the manage pass reads the
+broker (`quotes` for the last price, `order status` for each working leg) and acts
+on what it finds, so a position moves through one lifecycle:
+
+1. **Entry armed** — a stop-limit entry is placed at the breakout level. It rests
+   with the broker until price triggers it (or its plan horizon expires, at which
+   point it is cancelled).
+2. **Entry filled** — the fill is detected on a manage pass, and two resting legs
+   are placed: a protective stop-loss-market below (or above) entry, and a limit
+   target at T2.
+3. **T1 touched** — when the last price reaches T1, the protective stop is moved
+   up to lock the trade in; the target leg is left working.
+4. **Exit** — whichever leg fills first is booked as the exit and the sibling leg
+   is cancelled: the target is a `T2` exit, the stop is a `STOP` (or `T1_TRAIL`
+   once T1 has hit). A position still open at 15:15 is flattened by the global
+   square-off regardless.
+
+If an entry is rejected by the broker it is dropped without ever opening a
+position, and a rejected stop leg flattens the position rather than leaving it
+unprotected. Under `OPENALGO_DRY_RUN=1` none of this reaches the broker: the pass
+returns before it reads anything, and the journal records the intent instead.
+
 ---
 
 ## 4. The daily timeline (IST)
@@ -118,7 +142,7 @@ be in `analyze` mode or `assert_paper_only()` aborts the start. This project doe
 |---|---|---|
 | 09:15 | wake | Session opens; startup reconciliation runs; idle until the plan window. |
 | 10:15–11:15 | plan | Plans generated for the universe; risk-approved breakout entries placed once. |
-| 11:15–15:15 | manage | Open positions managed off the bar feed; stale working entries cancelled. |
+| 11:15–15:15 | manage | Every 30 s each open position is polled: entries resolved, T1 trails applied, filled legs booked, stale entries cancelled. |
 | 15:15 | squareoff | **Every** open position is flattened; the bot exits. |
 
 Entries are stop-triggered bracket orders (entry + stop + targets). The `plan`

@@ -103,28 +103,66 @@ from executor import Executor, Trade
 
 
 class FakeApi:
-    """In-memory OpenAlgo client double. Records every call it receives."""
+    """In-memory OpenAlgo client double. Records every call it receives.
+
+    The signatures mirror the installed SDK's keyword-only shape so the replay
+    exercises the same calls the live path does -- a positional `order_id` or a
+    missing `action` fails here too, not only under the executor's own tests.
+    """
 
     def __init__(self) -> None:
         self.orders: list[dict] = []
+        self.placed: list[dict] = []
         self.modified: list[dict] = []
         self.cancelled: list[str] = []
         self.closed: list[dict] = []
         self.margin_calls: list[list[dict]] = []
 
-    def placesmartorder(self, **kwargs):
-        self.orders.append(kwargs)
+    def placeorder(
+        self, *, strategy="Python", symbol, action, exchange,
+        price_type="MARKET", product="MIS", quantity=1, **kwargs,
+    ):
+        self.placed.append(
+            dict(symbol=symbol, action=action, exchange=exchange,
+                 price_type=price_type, product=product,
+                 quantity=quantity, **kwargs)
+        )
+        return {"status": "success", "data": {"orderid": f"P{len(self.placed)}"}}
+
+    def placesmartorder(
+        self, *, strategy="Python", symbol, action, exchange,
+        price_type="MARKET", product="MIS", quantity=1, position_size, **kwargs,
+    ):
+        self.orders.append(
+            dict(symbol=symbol, action=action, exchange=exchange,
+                 price_type=price_type, product=product,
+                 quantity=quantity, position_size=position_size, **kwargs)
+        )
         return {"status": "success", "data": {"orderid": f"O{len(self.orders)}"}}
 
-    def modifyorder(self, **kwargs):
-        self.modified.append(kwargs)
+    def modifyorder(
+        self, *, order_id, strategy="Python", symbol, action, exchange,
+        price_type="LIMIT", product, quantity, price,
+        disclosed_quantity="0", trigger_price="0", **kwargs,
+    ):
+        self.modified.append(
+            {
+                "order_id": order_id, "symbol": symbol, "action": action,
+                "exchange": exchange, "price_type": price_type,
+                "product": product, "quantity": quantity, "price": price,
+                "disclosed_quantity": disclosed_quantity,
+                "trigger_price": trigger_price,
+            }
+        )
         return {"status": "success"}
 
-    def cancelorder(self, order_id, **kwargs):
+    def cancelorder(self, *, order_id, strategy="Python", **kwargs):
         self.cancelled.append(order_id)
+        return {"status": "success"}
 
-    def closeposition(self, **kwargs):
+    def closeposition(self, *, strategy="Python", **kwargs):
         self.closed.append(kwargs)
+        return {"status": "success"}
 
     def margin(self, positions=None, pricetype=None):
         self.margin_calls.append(positions or [])

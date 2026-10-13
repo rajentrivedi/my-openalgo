@@ -261,7 +261,94 @@ def test_run_once_at_squareoff_flattens_open_positions():
 
     b.run_once(SQUAREOFF_NOW)
 
-    assert api.closed and api.closed[0]["symbol"] == "TCS"
+    # One global close flattens the whole book; the executor clears the rest.
+    assert api.closed == [{}]
+    assert b.executor.open_positions == {}
+
+
+# --- manage pass -----------------------------------------------------------
+
+
+def _open_trade(symbol, **kw):
+    """An `entry_filled` trade sitting in the executor's open book."""
+    base = {
+        "symbol": symbol, "side": "LONG", "qty": 50, "entry": 3500.0,
+        "stop": 3480.0, "entry_price": 3500.0, "stop_order_id": "O1",
+        "state": "entry_filled",
+    }
+    base.update(kw)
+    return bot.executor.Trade(**base)
+
+
+def test_manage_open_polls_the_monitor(monkeypatch):
+    api = FakeApi()
+    b = bot.Bot(api)
+    b.executor.open_positions["TCS"] = _open_trade("TCS")
+
+    seen = []
+    monkeypatch.setattr(
+        bot.monitor, "poll",
+        lambda api_, ex_, trade, *, now: seen.append((trade.symbol, now)),
+    )
+
+    b._manage_open(AFTER_PLAN)
+
+    assert seen == [("TCS", AFTER_PLAN)]
+
+
+def test_manage_open_skips_the_monitor_when_dry_run(monkeypatch):
+    monkeypatch.setattr(config, "DRY_RUN", True)
+    reads = []
+
+    class RecordingApi(FakeApi):
+        def quotes(self, **kw):
+            reads.append(("quotes", kw))
+
+        def orderstatus(self, **kw):
+            reads.append(("orderstatus", kw))
+
+    api = RecordingApi()
+    b = bot.Bot(api)
+    b.executor.open_positions["TCS"] = _open_trade("TCS")
+
+    b._manage_open(AFTER_PLAN)
+
+    # Dry run short-circuits before any broker read, so there is nothing to
+    # act on and nothing to journal.
+    assert reads == []
+    assert (api.orders, api.modified, api.cancelled, api.closed) == ([], [], [], [])
+
+
+def test_manage_open_survives_one_bad_trade(monkeypatch):
+    api = FakeApi()
+    b = bot.Bot(api)
+    b.executor.open_positions["BAD"] = _open_trade("BAD")
+    b.executor.open_positions["GOOD"] = _open_trade("GOOD")
+
+    polled = []
+
+    def _poll(api_, ex_, trade, *, now):
+        polled.append(trade.symbol)
+        if trade.symbol == "BAD":
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(bot.monitor, "poll", _poll)
+
+    b._manage_open(AFTER_PLAN)
+
+    # The snapshot is polled in order; the failure on BAD must not skip GOOD.
+    assert polled == ["BAD", "GOOD"]
+
+
+def test_square_off_all_flattens_everything_once():
+    api = FakeApi()
+    b = bot.Bot(api)
+    b.executor.open_positions["TCS"] = _open_trade("TCS")
+    b.executor.open_positions["INFY"] = _open_trade("INFY", stop_order_id="O2")
+
+    b._square_off_all()
+
+    assert api.closed == [{}]  # one global close flattens the whole book
     assert b.executor.open_positions == {}
 
 
