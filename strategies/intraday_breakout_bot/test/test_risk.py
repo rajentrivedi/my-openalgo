@@ -52,7 +52,7 @@ class FakeApi:
 
 def test_margin_check_passes_when_affordable():
     api = FakeApi(total=25012, cash=100000)
-    ok, _ = risk.check_margin({"symbol": "RELIANCE", "quantity": 100}, [], api)
+    ok, _ = risk.check_margin({"symbol": "RELIANCE", "action": "BUY", "quantity": 100}, [], api)
     assert ok is True
     assert api.seen[0]["quantity"] == "100"      # string, per SDK quirk
     assert api.seen[0]["pricetype"] == "MARKET"
@@ -60,9 +60,88 @@ def test_margin_check_passes_when_affordable():
 
 def test_margin_check_blocks_when_expensive():
     api = FakeApi(total=400000, cash=100000)
-    ok, detail = risk.check_margin({"symbol": "RELIANCE", "quantity": 100}, [], api)
+    ok, detail = risk.check_margin({"symbol": "RELIANCE", "action": "BUY", "quantity": 100}, [], api)
     assert ok is False
     assert "margin" in detail.lower()
+
+
+# --- Ruling: the margin payload must match the SDK's real wire contract -------
+# The live failure was a 400 from /api/v1/margin:
+#   positions[0].action: ['Missing data for required field.']
+#   pricetype:           ['Unknown field.']
+#
+# The SDK is `margin(self, *, positions, **kwargs)` and merges every kwarg
+# into the TOP-LEVEL body. So `pricetype="MARKET"` did not vanish -- it was
+# forwarded as an unknown top-level field, while `action` was never defaulted
+# per row and so had to be supplied by us. `FakeApi` above accepts `**kw`, so
+# it could not see either mistake; `StrictApi` mirrors the real signature.
+
+REQUIRED_POSITION_FIELDS = {"symbol", "exchange", "action", "product", "quantity", "pricetype"}
+
+
+class StrictApi:
+    """Mirrors the SDK signature exactly: no ``**kw`` tolerance."""
+
+    def __init__(self, total=1.0, cash=1e9):
+        self.total, self.cash, self.seen = total, cash, None
+
+    def margin(self, *, positions):
+        self.seen = positions
+        for row in positions:
+            missing = REQUIRED_POSITION_FIELDS - set(row)
+            if missing:
+                return {"status": "error",
+                        "message": f"positions[0] missing {sorted(missing)}"}
+        return {"status": "success",
+                "data": {"total_margin_required": self.total,
+                         "span_margin": self.total, "exposure_margin": 0}}
+
+
+def test_margin_call_sends_no_unknown_top_level_kwargs():
+    """A stray kwarg reaches the body as an unknown field, so none may be sent."""
+    api = StrictApi()
+    ok, detail = risk.check_margin(
+        {"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS",
+         "action": "BUY", "quantity": 100},
+        [], api,
+    )
+    assert ok is True, f"strict client rejected the payload: {detail}"
+
+
+def test_margin_payload_rows_carry_every_required_field():
+    api = StrictApi()
+    risk.check_margin(
+        {"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS",
+         "action": "BUY", "quantity": 100},
+        [], api,
+    )
+    assert REQUIRED_POSITION_FIELDS <= set(api.seen[0])
+
+
+def test_open_position_without_action_fails_closed():
+    """A row we cannot describe must block, not silently under-report exposure."""
+    api = StrictApi()
+    ok, _ = risk.check_margin(
+        {"symbol": "RELIANCE", "exchange": "NSE", "product": "MIS",
+         "action": "BUY", "quantity": 100},
+        [{"symbol": "TCS", "exchange": "NSE", "product": "MIS", "quantity": 5}],
+        api,
+    )
+    assert ok is False
+
+
+def test_evaluate_supplies_buy_action_for_a_long_plan():
+    api = StrictApi()
+    risk.evaluate(plan(), 0, 0.0, [], api)
+    assert api.seen is not None
+    assert api.seen[0]["action"] == "BUY"
+
+
+def test_evaluate_supplies_sell_action_for_a_short_plan():
+    api = StrictApi()
+    risk.evaluate(plan(side="SHORT"), 0, 0.0, [], api)
+    assert api.seen is not None
+    assert api.seen[0]["action"] == "SELL"
 
 
 def test_evaluate_blocks_on_watch_volume():
@@ -122,14 +201,14 @@ class NoCashApi:
 
 
 def test_margin_blocks_when_cash_undeterminable():
-    ok, detail = risk.check_margin({"symbol": "RELIANCE", "quantity": 100}, [], NoCashApi())
+    ok, detail = risk.check_margin({"symbol": "RELIANCE", "action": "BUY", "quantity": 100}, [], NoCashApi())
     assert ok is False
     assert "cash" in detail.lower()
 
 
 def test_margin_blocks_when_cash_undeterminable_even_if_cheap():
     """A trivially affordable-looking figure is still unverifiable -> block."""
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 1}, [], NoCashApi())
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 1}, [], NoCashApi())
     assert ok is False
 
 
@@ -152,7 +231,7 @@ def test_funds_failure_does_not_block_a_known_cash_figure():
                     "data": {"total_margin_required": 25012,
                              "span_margin": 25012, "exposure_margin": 0}}
 
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FundsBoom(),
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], FundsBoom(),
                               available_cash=100000.0)
     assert ok is True
 
@@ -166,7 +245,7 @@ def test_availablecash_in_margin_response_is_used():
         def funds(self):
             raise AssertionError("must not need a second round trip")
 
-    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [], DataCashApi())
+    ok, detail = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], DataCashApi())
     assert ok is False
     assert "margin" in detail.lower()
 
@@ -192,7 +271,7 @@ def test_margin_api_error_still_blocks():
         def margin(self, *, positions, **kw):
             raise RuntimeError("broker down")
 
-    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [], BoomApi())
+    ok, detail = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], BoomApi())
     assert ok is False
     assert "margin" in detail.lower()
 
@@ -202,7 +281,7 @@ def test_margin_bad_status_still_blocks():
         def margin(self, *, positions, **kw):
             return {"status": "error", "message": "nope"}
 
-    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [], BadStatusApi())
+    ok, detail = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], BadStatusApi())
     assert ok is False
     assert "margin" in detail.lower()
 
@@ -247,7 +326,7 @@ class NanCashApi:
 
 
 def test_nan_cash_in_margin_response_blocks():
-    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [], NanCashApi())
+    ok, detail = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], NanCashApi())
     assert ok is False
     assert "cash" in detail.lower()
 
@@ -257,12 +336,12 @@ def test_nan_cash_from_funds_blocks():
         def funds(self):
             return {"status": "success", "data": {"availablecash": NAN}}
 
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], NanFunds())
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], NanFunds())
     assert ok is False
 
 
 def test_infinite_cash_blocks():
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [],
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [],
                               NanCashApi(cash=float("inf")))
     assert ok is False
 
@@ -289,7 +368,7 @@ def test_bool_cash_is_not_a_cash_figure():
         def cash(self):
             return True
 
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], BoolCash())
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], BoolCash())
     assert ok is False
 
 
@@ -301,7 +380,7 @@ def test_negative_total_margin_required_is_rejected():
             return {"status": "success",
                     "data": {"total_margin_required": -500}}
 
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 1}, [], NegativeRequired())
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 1}, [], NegativeRequired())
     assert ok is False
 
 
@@ -321,7 +400,7 @@ def test_every_payload_row_has_string_quantity():
         {"symbol": "SBIN", "quantity": "75"},
         {"symbol": "BHARTIARTL", "quantity": 10.0},
     ]
-    ok, _ = risk.check_margin({"symbol": "RELIANCE", "quantity": 100},
+    ok, _ = risk.check_margin({"symbol": "RELIANCE", "action": "BUY", "quantity": 100},
                               open_positions, api)
     assert ok is True
     assert len(api.seen) == 5                      # proposed + 4 open
@@ -333,7 +412,7 @@ def test_every_payload_row_has_string_quantity():
 def test_malformed_open_position_without_quantity_is_dropped():
     """Sending a fabricated "0" row would inflate broker-side position count."""
     api = CountingApi()
-    ok, _ = risk.check_margin({"symbol": "RELIANCE", "quantity": 100},
+    ok, _ = risk.check_margin({"symbol": "RELIANCE", "action": "BUY", "quantity": 100},
                               [{"symbol": "TCS"}, {"symbol": "INFY", "quantity": 30}],
                               api)
     assert ok is True
@@ -455,14 +534,14 @@ class FallbackAffordableApi(FallbackApi):
 
 
 def test_nan_cash_override_blocks():
-    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [],
+    ok, detail = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [],
                                    ExpensiveApi(), available_cash=float("nan"))
     assert ok is False
     assert "cash" in detail.lower()
 
 
 def test_infinite_cash_override_blocks():
-    ok, detail = risk.check_margin({"symbol": "A", "quantity": 100}, [],
+    ok, detail = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [],
                                    ExpensiveApi(), available_cash=float("inf"))
     assert ok is False
     assert "cash" in detail.lower()
@@ -475,14 +554,14 @@ def test_negative_cash_override_is_unusable_not_merely_blocking():
     the override of -1.0 would have blocked via comparison. Approving proves
     the override was discarded as unusable rather than merely compared.
     """
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FallbackAffordableApi(),
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], FallbackAffordableApi(),
                               available_cash=-1.0)
     assert ok is True
 
 
 def test_bool_cash_override_is_not_a_cash_figure():
     """`isinstance(True, int)` is True, so a bool must be rejected explicitly."""
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FallbackAffordableApi(),
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], FallbackAffordableApi(),
                               available_cash=True)
     assert ok is True
 
@@ -495,14 +574,14 @@ def test_nan_override_falls_back_and_uses_broker_cash():
     actually consulted. With the raw override, `required > nan` is False and
     this would have approved.
     """
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FallbackApi(),
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], FallbackApi(),
                               available_cash=float("nan"))
     assert ok is False
 
 
 def test_nan_override_falls_back_successfully_rather_than_blocking():
     """...and when the fallback cash does cover it, the trade still proceeds."""
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FallbackAffordableApi(),
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], FallbackAffordableApi(),
                               available_cash=float("nan"))
     assert ok is True
 
@@ -517,7 +596,7 @@ def test_finite_cash_override_still_short_circuits():
             return {"status": "success",
                     "data": {"total_margin_required": 25012, "availablecash": 1.0}}
 
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], NoFundsAllowed(),
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], NoFundsAllowed(),
                               available_cash=1e9)
     assert ok is True
 
@@ -528,7 +607,7 @@ def test_zero_cash_override_blocks_even_though_fallback_could_approve():
     Discriminating: `fallback` could answer 100,000 and approve, so blocking
     proves the explicit zero was actually used.
     """
-    ok, _ = risk.check_margin({"symbol": "A", "quantity": 100}, [], FallbackApi(),
+    ok, _ = risk.check_margin({"symbol": "A", "action": "BUY", "quantity": 100}, [], FallbackApi(),
                               available_cash=0.0)
     assert ok is False
 
@@ -550,7 +629,7 @@ def test_proposed_position_without_quantity_is_rejected():
 def test_proposed_explicit_zero_quantity_is_still_sent():
     """0 is an explicit, meaningful quantity -- distinct from absent."""
     api = CountingApi()
-    ok, _ = risk.check_margin({"symbol": "RELIANCE", "quantity": 0}, [], api)
+    ok, _ = risk.check_margin({"symbol": "RELIANCE", "action": "BUY", "quantity": 0}, [], api)
     assert ok is True
     assert api.seen[0]["quantity"] == "0"
 

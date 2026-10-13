@@ -27,12 +27,13 @@ MAX_CONCURRENT = 4
 DAILY_LOSS_LIMIT = 3000.0
 
 # --- Instrument / session ---------------------------------------------------
+# The session clock lives in ``bot.STAGES`` (wake/plan/squareoff) and the bar
+# grid in ``planner.SESSION_START_MINUTE``. Earlier revisions also declared
+# PLAN_TIME / SQUAREOFF_TIME / SESSION_START here; nothing read them, so
+# editing them changed nothing while appearing to move the schedule.
 
 EXCHANGE = "NSE"
 PRODUCT = "MIS"
-PLAN_TIME = "10:10"
-SQUAREOFF_TIME = "15:15"
-SESSION_START = "09:15"
 
 # --- Paths ------------------------------------------------------------------
 
@@ -112,11 +113,8 @@ __all__ = [
     "JOURNAL_DIR",
     "MAX_CONCURRENT",
     "PACKAGE_DIR",
-    "PLAN_TIME",
     "PRODUCT",
     "RISK_PCT",
-    "SESSION_START",
-    "SQUAREOFF_TIME",
     "TZ",
     "UNIVERSE_PATH",
     "WS_URL",

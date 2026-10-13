@@ -139,3 +139,50 @@ def test_send_succeeds_when_success_carries_no_failed_key(monkeypatch):
             return {"status": "success", "data": {"success": ["self"]}}
     monkeypatch.setattr(notify, "client", lambda: NoData())
     assert notify.send("hello") is True
+
+
+# --- Ruling: `to` takes an E.164 number, never the word "self" ---------------
+# Observed live on 2026-10-12: every notification came back
+#   HTTP 400 {"message":"Invalid phone number"}
+# because `RECIPIENT` was the literal string "self" passed as `to=`. The SDK
+# reads `to` as a phone number; "self" is only meaningful as the *default*
+# when `to` is omitted, which the server resolves to the paired device's own
+# number (`self: true`).
+
+class RecordingClient:
+    def __init__(self):
+        self.calls = []
+
+    def whatsapp(self, **kw):
+        self.calls.append(kw)
+        return {"status": "success", "message": "sent"}
+
+
+def test_send_omits_to_so_the_server_resolves_self(monkeypatch):
+    rec = RecordingClient()
+    monkeypatch.setattr(notify, "client", lambda: rec)
+    monkeypatch.setattr(notify, "RECIPIENT", None)
+
+    assert notify.send("hello") is True
+
+    assert rec.calls[0].get("to", "ABSENT") == "ABSENT"
+
+
+def test_send_never_sends_the_literal_string_self_as_to(monkeypatch):
+    """The literal is the bug; pin it so a config edit cannot reintroduce it."""
+    rec = RecordingClient()
+    monkeypatch.setattr(notify, "client", lambda: rec)
+    monkeypatch.setattr(notify, "RECIPIENT", "self")
+
+    notify.send("hello")
+
+    assert rec.calls[0].get("to") != "self"
+
+
+def test_send_passes_a_configured_e164_recipient_through(monkeypatch):
+    rec = RecordingClient()
+    monkeypatch.setattr(notify, "client", lambda: rec)
+    monkeypatch.setattr(notify, "RECIPIENT", "919876543210")
+
+    assert notify.send("hello") is True
+    assert rec.calls[0]["to"] == "919876543210"

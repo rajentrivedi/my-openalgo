@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -59,6 +60,18 @@ HISTORY_PATH = "/api/v1/history"
 
 #: Seconds before giving up on a single history request.
 REQUEST_TIMEOUT = 30
+
+#: Total attempts per symbol, including the first. A universe scan fetches
+#: DEFAULT_DAYS of 5-minute bars for every symbol back to back, so a read that
+#: trips the 30s timeout is usually contention rather than a bad symbol --
+#: and `plan_today` degrades any failure to an errored plan, so one blip
+#: silently removes that symbol from the day.
+RETRY_ATTEMPTS = 3
+
+#: Seconds between attempts. Flat, not exponential: the scan is sequential, so
+#: backing off for many seconds would let a slow symbol hold the whole book
+#: behind it.
+RETRY_BACKOFF_SECONDS = 1.0
 
 
 @dataclass
@@ -175,15 +188,34 @@ def fetch_history(
     }
     url = f"{config.API_HOST.rstrip('/')}{HISTORY_PATH}"
 
-    try:
-        response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        body = response.json()
-    except requests.RequestException as exc:
-        # Transport and HTTP-status failures only. A `TypeError` or
-        # `AttributeError` here is a bug in this function, not a bad symbol, so
-        # it propagates instead of being relabelled as an API failure.
-        raise RuntimeError(f"history request failed for {symbol}: {exc}") from exc
+    body = None
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        try:
+            response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            body = response.json()
+            break
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            # Retryable: the request never got an answer, so nothing about it
+            # tells us the symbol is bad. Exhausting the budget falls through
+            # to the RuntimeError below.
+            if attempt == RETRY_ATTEMPTS:
+                raise RuntimeError(
+                    f"history request failed for {symbol}: {exc} "
+                    f"(after {RETRY_ATTEMPTS} attempts)"
+                ) from exc
+            logger.warning(
+                "history fetch for %s hit %s; retrying (attempt %s/%s)",
+                symbol, type(exc).__name__, attempt, RETRY_ATTEMPTS,
+            )
+            time.sleep(RETRY_BACKOFF_SECONDS)
+        except requests.RequestException as exc:
+            # An HTTP status failure is deterministic -- a 400 for an unknown
+            # symbol will be a 400 on every retry -- so it is raised at once.
+            # A `TypeError` or `AttributeError` is not a RequestException and so
+            # propagates: it is a bug in this function, not a bad symbol, and
+            # must not be relabelled as an API failure.
+            raise RuntimeError(f"history request failed for {symbol}: {exc}") from exc
 
     if not isinstance(body, dict) or body.get("status") != "success":
         message = (

@@ -12,6 +12,15 @@
 # the broker. The session refuses to trade unless the account is in `analyze`
 # (paper) mode — see `config.assert_paper_only()` — so a misconfigured live key
 # aborts with exit 1 rather than placing real orders.
+#
+# Safety aborts are TERMINAL: `RestartPreventExitStatus=1 2` stops systemd from
+# auto-restarting the two deliberate refusals -- exit 1 (not in paper/analyze
+# mode) and exit 2 (startup reconciliation found orphan positions). Without
+# this, `Restart=always` would silently retry a safety refusal every 30s
+# forever, hiding the fault and risking an unattended start the moment a
+# misconfiguration clears. A clean daily square-off (exit 0) and any crash
+# still restart as intended; a refusal lands the unit in `failed` for the
+# operator to see and fix.
 [Unit]
 Description=OpenAlgo Intraday Breakout Paper Trading Bot
 After=network-online.target
@@ -26,6 +35,7 @@ EnvironmentFile=/home/pcadmin/Documents/nse/openalgo/strategies/intraday_breakou
 ExecStart=/usr/bin/python3 -m bot
 Restart=always
 RestartSec=30
+RestartPreventExitStatus=1 2
 
 [Install]
 WantedBy=multi-user.target

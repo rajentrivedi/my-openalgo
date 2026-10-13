@@ -211,6 +211,31 @@ def _payload_positions(
 
         row["quantity"] = str(quantity)
         row["pricetype"] = "MARKET"
+        # Safe defaults for the fields where one answer is correct for every
+        # order this bot places (pinned to the bot's own exchange and product),
+        # so a caller cannot desynchronise them from the account.
+        row.setdefault("exchange", config.EXCHANGE)
+        row.setdefault("product", config.PRODUCT)
+
+        # ``action`` is required per row by /api/v1/margin and is never
+        # defaulted by the SDK. ``evaluate`` supplies it for the proposed row,
+        # because our plan vocabulary is LONG/SHORT and the broker's is
+        # BUY/SELL; a proposed row without it is one we cannot describe, so it
+        # raises rather than guessing a direction.
+        #
+        # Open rows come straight from ``positionbook()`` without reshaping
+        # (see ``bot.Bot._fetch_positions``), so they carry whatever the broker
+        # emits. A net-position row has no ``action`` of its own -- direction
+        # lives in the sign of ``netQty`` -- so one is NOT invented here: a
+        # missing field lets the API reject the payload and the gate fail
+        # closed, which is the same outcome as before this change and strictly
+        # better than a fabricated direction that would misprice the
+        # requirement. Deriving it from ``netQty`` needs a live open position
+        # to verify against; the account is flat, so that mapping is unproven
+        # and deliberately not written.
+        if not row.get("action") and is_proposed:
+            raise ValueError(f"proposed position has no 'action' key: {position!r}")
+
         rows.append(row)
     return rows
 
@@ -294,7 +319,11 @@ def check_margin(
         return False, f"margin call failed: {exc}"
 
     try:
-        response = api_client.margin(positions=positions, pricetype="MARKET")
+        # No kwargs: the SDK merges every one of them into the TOP-LEVEL body,
+        # where /api/v1/margin rejects anything it does not know ("Unknown
+        # field 'pricetype'"). Per-position fields are set by
+        # `_payload_positions`, which is where the contract lives.
+        response = api_client.margin(positions=positions)
     except Exception as exc:  # noqa: BLE001 - any broker/transport failure
         logger.warning("margin call raised: %s", exc)
         return False, f"margin call failed: {exc}"
@@ -435,6 +464,10 @@ def evaluate(
         "quantity": quantity,
         "exchange": config.EXCHANGE,
         "product": config.PRODUCT,
+        # /api/v1/margin requires ``action`` per position and rejects a
+        # top-level one; the SDK never defaults it. Our plan vocabulary is
+        # LONG/SHORT, the broker's is BUY/SELL.
+        "action": "BUY" if plan.side == "LONG" else "SELL",
     }
     ok, detail = check_margin(proposed, open_positions, api_client)
     if not ok:

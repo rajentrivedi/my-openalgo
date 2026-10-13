@@ -38,9 +38,24 @@ from planner import Plan
 # docstring): any logic that reached for `datetime.now()` instead of the
 # session clock would treat these plans as expired and skip them.
 SESSION_DAY = dt.date(2026, 10, 8)
-PLAN_NOW = dt.datetime(2026, 10, 8, 10, 10, tzinfo=config.TZ)
-BEFORE_PLAN = dt.datetime(2026, 10, 8, 9, 30, tzinfo=config.TZ)
-SQUAREOFF_NOW = dt.datetime(2026, 10, 8, 15, 15, tzinfo=config.TZ)
+
+
+def at(hhmm):
+    """The session clock for a `"HH:MM"` IST time on the test's session date."""
+    hour, minute = (int(part) for part in hhmm.split(":"))
+    return dt.datetime(
+        SESSION_DAY.year, SESSION_DAY.month, SESSION_DAY.day,
+        hour, minute, tzinfo=config.TZ,
+    )
+
+
+# Derived from the configured schedule, not hardcoded: if `STAGES["plan"]` moves
+# forward, `PLAN_NOW` must move with it or `test_run_once_at_plan_time_...`
+# silently degrades into a before-plan no-op that passes for the wrong reason.
+PLAN_NOW = at(bot.STAGES["plan"])
+BEFORE_PLAN = at("09:30")
+AFTER_PLAN = at(bot.PLAN_WINDOW_END) - dt.timedelta(minutes=5)
+SQUAREOFF_NOW = at(bot.STAGES["squareoff"])
 
 
 def plan(**kw):
@@ -160,9 +175,43 @@ def test_run_once_plan_stage_fires_once_per_day(monkeypatch):
     b = bot.Bot(FakeApi())
 
     b.run_once(PLAN_NOW)
-    b.run_once(dt.datetime(2026, 10, 8, 10, 40, tzinfo=config.TZ))
+    b.run_once(AFTER_PLAN)
 
     assert calls["n"] == 1
+
+
+def test_plan_stage_is_scheduled_after_the_trigger_bar_closes():
+    """The plan stage must not run before the strategy's trigger bar exists.
+
+    `plan_for_day` pins its plan to the 10:10 five-minute bar and advances `now`
+    by one bar, so the trigger bar is only complete at 10:15. Running the plan
+    stage at 10:10 makes the planner see a bar that does not exist yet and
+    return no plans for the whole universe; `_planned_day` then latches and the
+    day is skipped with nothing journaled. The trigger time is read from the
+    backtest source rather than restated here, so this gate tracks the strategy
+    and not a local literal that can drift away from it.
+    """
+    import pathlib
+    import re
+
+    import backtest_source
+    import planner
+
+    source = pathlib.Path(backtest_source._resolve_path()).read_text()
+    match = re.search(r'f"\{day\}\s+(\d{1,2}):(\d{2})"', source)
+    assert match is not None, (
+        "could not find the 10:10 trigger expression in the backtest source; "
+        "the backtest has been refactored and this test needs updating"
+    )
+    hour, minute = (int(part) for part in match.groups())
+    trigger_close = dt.datetime(2026, 10, 8, hour, minute, tzinfo=config.TZ)
+    trigger_close += dt.timedelta(minutes=planner.BAR_MINUTES)
+
+    assert at(bot.STAGES["plan"]) >= trigger_close, (
+        f"plan stage at {bot.STAGES['plan']} runs before the trigger bar closes "
+        f"({trigger_close:%H:%M}); the planner would see a missing bar and "
+        f"skip the entire day"
+    )
 
 
 def test_run_once_skips_non_takeable_plans(monkeypatch):

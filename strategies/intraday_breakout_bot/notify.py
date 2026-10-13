@@ -31,6 +31,7 @@ server's own message, code and error_type.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import config
@@ -38,7 +39,16 @@ import config
 logger = logging.getLogger(__name__)
 
 #: Destination for every notification. This bot has one operator.
-RECIPIENT = "self"
+#:
+#: ``None`` (the default) means *omit* ``to`` entirely, and the server resolves
+#: the paired device's own number (``self: true``). Setting it to an E.164
+#: digit string such as ``"919876543210"`` sends there instead.
+#:
+#: It must never be the literal string ``"self"``: the SDK reads ``to`` as a
+#: phone number, so that value reaches /api/v1/whatsapp/notify as a
+#: non-numeric recipient and is rejected with ``400 Invalid phone number``.
+#: "self" is only meaningful as the *absent* argument, never as this one.
+RECIPIENT: str | None = os.getenv("INTRADAY_BREAKOUT_NOTIFY_TO") or None
 
 _client = None
 
@@ -117,6 +127,31 @@ def _has_failed_recipients(response: dict) -> bool:
     return isinstance(failed, list) and bool(failed)
 
 
+def _usable_recipient() -> str | None:
+    """The E.164 recipient to send to, or None to let the server pick self.
+
+    Guards the one mistake this module has already made: `RECIPIENT` is
+    environment-driven, so a value like ``"self"`` or a number with spaces
+    reaches it without anyone editing code. The server answers that with
+    ``400 Invalid phone number``, so it is caught here instead -- once, at the
+    boundary, with a log line naming the bad value. Falling back to the
+    operator's own paired device keeps alerts flowing instead of dropping
+    every notification to a 400.
+    """
+    if not RECIPIENT:
+        return None
+    digits = RECIPIENT.strip().lstrip("+")
+    if not digits.isdigit() or not 8 <= len(digits) <= 15:
+        logger.warning(
+            "ignoring unusable notification recipient %r; expected an E.164 "
+            "digit string such as '919876543210', or leave it unset to send "
+            "to the paired device itself",
+            RECIPIENT,
+        )
+        return None
+    return digits
+
+
 def send(message: str) -> bool:
     """Send `message` to the operator's WhatsApp. Returns True on success.
 
@@ -130,7 +165,12 @@ def send(message: str) -> bool:
     """
     try:
         # `client()` is looked up as a module global so tests can replace it.
-        response = client().whatsapp(message=message, to=RECIPIENT)
+        # `to` is passed only when a real recipient is configured; see RECIPIENT.
+        kwargs: dict[str, Any] = {"message": message}
+        recipient = _usable_recipient()
+        if recipient:
+            kwargs["to"] = recipient
+        response = client().whatsapp(**kwargs)
     # `Exception`, deliberately NOT `BaseException`: KeyboardInterrupt and
     # SystemExit must propagate so Ctrl-C can stop a live session. Do not
     # "fix" this into a bare `except:` or a BaseException catch -- a bot that

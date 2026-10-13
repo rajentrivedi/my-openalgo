@@ -54,7 +54,18 @@ logger = logging.getLogger(__name__)
 #: The three fixed points of a trading day, as `"HH:MM"` IST strings. `wake`
 #: marks the session open; `plan` is when the day's plans are generated and
 #: entries placed; `squareoff` is the hard flatten-everything deadline.
-STAGES: dict[str, str] = {"wake": "09:15", "plan": "10:10", "squareoff": "15:15"}
+#:
+#: `plan` must not precede the close of the strategy's trigger bar. The
+#: backtest pins its plan to the 10:10 five-minute bar, so running the plan
+#: stage at 10:10 makes the planner see a bar that does not exist yet and
+#: return no plans for the whole universe; `_planned_day` then latches and the
+#: whole `[plan, PLAN_WINDOW_END)` window is skipped with nothing journaled.
+#: 10:15 -- one bar after the 10:10 trigger -- is the earliest safe time.
+STAGES: dict[str, str] = {
+    "wake": "09:15",
+    "plan": "10:15",
+    "squareoff": "15:15",
+}
 
 #: End of the planning window. The plan stage fires once per day somewhere in
 #: `[plan, PLAN_WINDOW_END)`; after it, the bot only manages open positions.

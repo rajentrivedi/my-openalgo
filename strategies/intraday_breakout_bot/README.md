@@ -85,6 +85,14 @@ After the session (or the next day), confirm two things:
 The bot exits `0` at square-off, `1` if the account is not in paper mode, and `2`
 if startup reconciliation finds a pre-existing position it cannot account for.
 
+> **Deferred check — verify the paper guard's *accept* path once, by hand.** The
+> test suite proves `assert_paper_only()` *refuses* (exit 1) a non-paper account,
+> but its *accept* path has never run against a real OpenAlgo server in `analyze`
+> mode (none was available at build time). Before your first dry-run session,
+> confirm `python3 -m bot` gets **past** the paper guard and into the session loop
+> against your own analyze-mode server — if it aborts with exit 1, your account is
+> not actually in paper mode, regardless of `OPENALGO_DRY_RUN`.
+
 ---
 
 ## 3. Flip to live paper execution
@@ -109,13 +117,16 @@ be in `analyze` mode or `assert_paper_only()` aborts the start. This project doe
 | Time | Stage | What happens |
 |---|---|---|
 | 09:15 | wake | Session opens; startup reconciliation runs; idle until the plan window. |
-| 10:10–11:15 | plan | Plans generated for the universe; risk-approved breakout entries placed once. |
+| 10:15–11:15 | plan | Plans generated for the universe; risk-approved breakout entries placed once. |
 | 11:15–15:15 | manage | Open positions managed off the bar feed; stale working entries cancelled. |
 | 15:15 | squareoff | **Every** open position is flattened; the bot exits. |
 
 Entries are stop-triggered bracket orders (entry + stop + targets). The `plan`
 window is a window, not an instant, so a poll that lands a few minutes late still
-runs the plan stage instead of skipping the day.
+runs the plan stage instead of skipping the day. The plan is pinned to the 10:10
+five-minute bar (which closes at 10:15), so the stage must never run earlier than
+10:15 — planning at 10:10 makes the planner see a bar that does not exist yet and
+skip the entire universe for the day.
 
 ---
 
@@ -208,6 +219,13 @@ Carried from the design spec (§12) — read these before trusting any number:
    gap at entry can still exceed planned risk. Sizing assumes the stop fills.
 6. **EXPIRY exits are assumed fillable at market** at plan expiry; thin names may
    slip.
+7. **Service model is one-session-per-process.** The bot exits `0` at square-off
+   and `Restart=always` brings it back; between 15:15 and midnight each restart
+   re-exits immediately (it is past the square-off deadline), so expect periodic
+   benign restarts and startup API calls in that window until the next trading
+   day. The two safety aborts (exit 1 paper-guard, exit 2 orphan reconciliation)
+   are exempted via `RestartPreventExitStatus=1 2` and are therefore terminal —
+   a refusal shows up as a `failed` unit, not a silent retry loop.
 
 **Scope:** paper trading only. Real-money/live trading, options/F&O, multi-leg
 strategies, and any UI are explicitly out of scope.

@@ -424,3 +424,72 @@ def test_plan_today_does_not_swallow_programming_errors_from_fetch(monkeypatch):
 )
 def test_is_takeable(kwargs, expected):
     assert planner.Plan(symbol="X", **kwargs).is_takeable is expected
+
+
+# --- Ruling: a transient transport failure must not silently drop a symbol ---
+# Observed live on 2026-10-12: scanning the 64-symbol universe, KAYNES hit
+# `Read timed out. (read timeout=30)` and was recorded as an errored plan --
+# one warning line, and the symbol is simply absent from the day. With
+# DEFAULT_DAYS=60 of 5-minute bars per symbol this recurs, so a blip must not
+# be allowed to decide the book.
+
+
+def _stub_post_sequence(monkeypatch, responses):
+    """Replace requests.post with one that walks `responses` in order."""
+    seq = list(responses)
+    seen = []
+
+    def fake_post(url, json, timeout, headers=None):
+        seen.append(json)
+        nxt = seq.pop(0) if len(seq) > 1 else seq[0]
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+    monkeypatch.setattr(planner.requests, "post", fake_post)
+    return seen
+
+
+def test_fetch_history_retries_a_timeout_then_succeeds(monkeypatch):
+    import requests as _rq
+
+    monkeypatch.setattr(planner.time, "sleep", lambda *_a, **_k: None)
+    ok = {"status": "success", "data": [bar("09:15")]}
+    seen = _stub_post_sequence(
+        monkeypatch,
+        [_rq.exceptions.ReadTimeout("read timeout=30"), _FakeResponse(ok)],
+    )
+
+    df = planner.fetch_history("KAYNES", days=30)
+
+    assert len(df) == 1
+    assert len(seen) == 2, "should have retried once after the timeout"
+
+
+def test_fetch_history_gives_up_after_the_retry_budget(monkeypatch):
+    import requests as _rq
+
+    monkeypatch.setattr(planner.time, "sleep", lambda *_a, **_k: None)
+    seen = _stub_post_sequence(
+        monkeypatch, [_rq.exceptions.ReadTimeout("read timeout=30")]
+    )
+
+    with pytest.raises(RuntimeError, match="history request failed"):
+        planner.fetch_history("KAYNES", days=30)
+
+    assert len(seen) == planner.RETRY_ATTEMPTS
+
+
+def test_fetch_history_does_not_retry_an_http_status_error(monkeypatch):
+    """A 400 is deterministic; retrying it only delays the honest failure."""
+    import requests as _rq
+
+    monkeypatch.setattr(planner.time, "sleep", lambda *_a, **_k: None)
+    seen = _stub_post_sequence(
+        monkeypatch, [_rq.exceptions.HTTPError("400 Client Error")]
+    )
+
+    with pytest.raises(RuntimeError, match="history request failed"):
+        planner.fetch_history("J_KBANK", days=30)
+
+    assert len(seen) == 1

@@ -67,10 +67,72 @@ _FIELD_SOURCE_ALIASES = {
 }
 
 
+#: OpenAlgo's NSE symbol master, used to undo the CSV export's filename
+#: sanitization. ``database/historify_db.py::_sanitize_filename`` rewrites every
+#: character outside ``[A-Za-z0-9_\-.]`` to ``_`` when it names an archive member
+#: and ships no manifest, so a screen run over those CSVs reports ``J_KBANK``
+#: for ``J&KBANK`` and ``M_M`` for ``M&M``. Those names reach the API and come
+#: back 400, which silently drops the symbol from the plan.
+_SYMBOL_MASTER_DB = _NSE_ROOT / "openalgo-chart" / "db" / "openalgo.db"
+
+#: Fallback when the master is unreadable, covering the sanitized names the
+#: exports actually contain.
+_SYMBOL_OVERRIDES = {
+    "ARE_M": "ARE&M",
+    "GVT_D": "GVT&D",
+    "J_KBANK": "J&KBANK",
+    "M_M": "M&M",
+    "M_MFIN": "M&MFIN",
+}
+
+_MASTER_CACHE: set[str] = set()
+
+
+def _nse_master() -> set[str]:
+    """Every symbol the OpenAlgo master knows for NSE; empty if unavailable."""
+    global _MASTER_CACHE
+    if _MASTER_CACHE:
+        return _MASTER_CACHE
+    try:
+        import sqlite3
+
+        with sqlite3.connect(f"file:{_SYMBOL_MASTER_DB}?mode=ro", uri=True) as conn:
+            _MASTER_CACHE = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT DISTINCT symbol FROM symtoken WHERE exchange = 'NSE'"
+                )
+            }
+    except Exception:  # noqa: BLE001 - an absent master must not abort generation
+        _MASTER_CACHE = set()
+    return _MASTER_CACHE
+
+
+def _canonical(symbol: str, master: set[str]) -> str:
+    """Repair a sanitized symbol, or raise if no repair can be confirmed.
+
+    Fails loudly rather than emitting a guess: ``universe.json`` is a reviewed
+    source of truth, and a wrong ticker that happens to resolve would mislabel
+    the book rather than fail.
+    """
+    if symbol in _SYMBOL_OVERRIDES:
+        return _SYMBOL_OVERRIDES[symbol]
+    if not master or symbol in master:
+        return symbol
+    repaired = symbol.replace("_", "&")
+    if repaired != symbol and repaired in master:
+        return repaired
+    raise SystemExit(
+        f"screen symbol {symbol!r} is not a known NSE symbol, and no repair of "
+        f"it resolves to one; fix the source CSV before regenerating"
+    )
+
+
 def _read_screen_symbols() -> list[str]:
     """The passing symbols, in the screen's rank order."""
+    master = _nse_master()
     with SCREEN_CSV.open(newline="", encoding="utf-8") as fh:
-        return [row["Symbol"] for row in csv.DictReader(fh)]
+        return [_canonical(row["Symbol"].strip(), master) for row in csv.DictReader(fh)]
 
 
 def _total_r(row: dict) -> float:
